@@ -219,9 +219,9 @@ public:
         // return: [ne3, ne2, ne1, dim_out]
         auto proj = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
 
-        x = proj->forward(ctx, x);
-        x = ggml_ext_gelu(ctx, x, true);
-        return x;
+        // Let the allocator reuse the projection buffer when GELU runs separately.
+        // An explicit in-place write prevents folding GELU into ConvRot quantization.
+        return ggml_ext_gelu(ctx, proj->forward(ctx, x));
     }
 };
 

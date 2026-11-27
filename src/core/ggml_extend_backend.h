@@ -92,6 +92,7 @@ private:
 
 bool sd_backend_is(ggml_backend_t backend, const std::string& name);
 bool sd_backend_is_cpu(ggml_backend_t backend);
+bool sd_backend_is_cuda_family(ggml_backend_t backend);
 bool sd_backend_supports_cuda_mma(ggml_backend_t backend);
 bool sd_backend_supports_hip_mma(ggml_backend_t backend);
 bool sd_backend_supports_conv_implicit_gemm(ggml_backend_t backend, bool conv3d);

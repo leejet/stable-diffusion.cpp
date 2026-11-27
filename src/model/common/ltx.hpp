@@ -178,13 +178,13 @@ namespace LTXV {
                                                      bool rope_interleaved) {
         auto ctx = runner_ctx->ggml_ctx;
         GGML_ASSERT(x->ne[0] == heads * dim_head);
-        auto x4 = ggml_reshape_4d(ctx, x, dim_head, heads, x->ne[1], x->ne[2]);
         if (pe != nullptr && pe->ne[3] == x->ne[1] * heads) {
-            auto x_flat   = ggml_reshape_4d(ctx, x4, dim_head, 1, x->ne[1] * heads, x->ne[2]);
+            auto x_flat   = ggml_reshape_4d(ctx, x, dim_head, 1, x->ne[1] * heads, x->ne[2]);
             auto out_flat = Rope::apply_rope(runner_ctx, x_flat, pe, rope_interleaved);
             auto out4     = ggml_reshape_4d(ctx, out_flat, dim_head, heads, x->ne[1], x->ne[2]);
             return ggml_reshape_3d(ctx, out4, heads * dim_head, x->ne[1], x->ne[2]);
         }
+        auto x4 = ggml_reshape_4d(ctx, x, dim_head, heads, x->ne[1], x->ne[2]);
         return Rope::apply_rope(runner_ctx, x4, pe, rope_interleaved);
     }
 
@@ -266,14 +266,18 @@ namespace LTXV {
                 k = apply_hidden_rope(ctx, k, k_pe, heads, dim_head, rope_interleaved);
             }
 
-            auto out = ggml_ext_attention_ext(ctx,
-                                              q,
-                                              k,
-                                              v,
-                                              heads,
-                                              mask,
-                                              false,
-                                              ctx->flash_attn_enabled);
+            const bool strided_qk = ctx->flash_attn_enabled && !ctx->sage_attn_enabled &&
+                                    q->ne[2] == 1 && k->ne[2] == 1 && v->ne[2] == 1 &&
+                                    sd_backend_is_cuda_family(ctx->backend);
+            if (strided_qk) {
+                auto split_heads = [&](ggml_tensor* x) {
+                    return ggml_reshape_4d(ctx->ggml_ctx, x, dim_head, heads, x->ne[1], 1);
+                };
+                q = ggml_permute(ctx->ggml_ctx, split_heads(q), 0, 2, 1, 3);
+                k = ggml_permute(ctx->ggml_ctx, split_heads(k), 0, 2, 1, 3);
+                v = split_heads(v);
+            }
+            auto out = ggml_ext_attention_ext(ctx, q, k, v, heads, mask, strided_qk, ctx->flash_attn_enabled);
 
             if (blocks.count("to_gate_logits") > 0) {
                 auto to_gate_logits = std::dynamic_pointer_cast<Linear>(blocks["to_gate_logits"]);
@@ -283,7 +287,6 @@ namespace LTXV {
                 gates               = ggml_reshape_4d(ctx->ggml_ctx, gates, 1, heads, gate_logits->ne[1], gate_logits->ne[2]);
 
                 auto out4 = ggml_reshape_4d(ctx->ggml_ctx, out, dim_head, heads, out->ne[1], out->ne[2]);
-                gates     = ggml_repeat(ctx->ggml_ctx, gates, out4);
                 out4      = ggml_mul(ctx->ggml_ctx, out4, gates);
                 out       = ggml_reshape_3d(ctx->ggml_ctx, out4, heads * dim_head, out4->ne[2], out4->ne[3]);
             }

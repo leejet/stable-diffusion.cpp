@@ -15,12 +15,6 @@ namespace sd {
         : tensor_cache_(tensor_cache),
           graph_(graph) {
         GGML_ASSERT(graph_ != nullptr);
-        for (int i = 0; i < ggml_graph_n_nodes(graph_); ++i) {
-            ggml_tensor* tensor = ggml_graph_node(graph_, i);
-            Topology topology{tensor->op, {}, tensor->view_src, tensor->flags};
-            std::copy(std::begin(tensor->src), std::end(tensor->src), topology.sources.begin());
-            topology_[tensor] = topology;
-        }
         for (const auto& segment : plan.segments) {
             for (const auto& input : segment.input_refs) {
                 if (input.type != ggml_graph_cut::Segment::INPUT_EXTERNAL) {
@@ -35,8 +29,15 @@ namespace sd {
         }
     }
 
+    void SegmentGraphBindings::remember(ggml_tensor* tensor) {
+        Topology topology{tensor, tensor->op, {}, tensor->view_src, tensor->flags};
+        std::copy(std::begin(tensor->src), std::end(tensor->src), topology.sources.begin());
+        topology_.push_back(topology);
+    }
+
     void SegmentGraphBindings::reset(const ggml_graph_cut::Segment& segment) {
         restore();
+        topology_.reserve(segment.internal_node_indices.size() + segment.input_refs.size() + 2 * segment.output_node_indices.size());
         for (const auto& input : segment.input_refs) {
             ggml_tensor* tensor = ggml_graph_cut::input_tensor(graph_, input);
             if (tensor == nullptr) {
@@ -44,6 +45,7 @@ namespace sd {
             }
             switch (input.type) {
                 case ggml_graph_cut::Segment::INPUT_PREVIOUS_CUT:
+                    remember(tensor);
                     tensor->buffer = nullptr;
                     tensor->data   = nullptr;
                     tensor->extra  = nullptr;
@@ -71,19 +73,32 @@ namespace sd {
             if (node == nullptr) {
                 continue;
             }
+            remember(node);
             node->buffer = nullptr;
             node->data   = nullptr;
             node->extra  = nullptr;
+        }
+        // The segment builder marks outputs and the storage backing output views.
+        for (int node_index : segment.output_node_indices) {
+            auto* output = ggml_graph_node(graph_, node_index);
+            if (output == nullptr) {
+                continue;
+            }
+            remember(output);
+            if (output->view_src != nullptr) {
+                remember(output->view_src);
+            }
         }
     }
 
     void SegmentGraphBindings::restore() {
         for (const auto& entry : topology_) {
-            entry.first->op       = entry.second.op;
-            entry.first->view_src = entry.second.view_source;
-            entry.first->flags    = entry.second.flags;
-            std::copy(entry.second.sources.begin(), entry.second.sources.end(), std::begin(entry.first->src));
+            entry.tensor->op       = entry.op;
+            entry.tensor->view_src = entry.view_source;
+            entry.tensor->flags    = entry.flags;
+            std::copy(entry.sources.begin(), entry.sources.end(), std::begin(entry.tensor->src));
         }
+        topology_.clear();
     }
 
     bool SegmentGraphBindings::bind_cached_inputs(
@@ -106,14 +121,14 @@ namespace sd {
                 return false;
             }
             if (input_tensor->view_src != nullptr) {
-                cached_view_sources[topology_.at(input_tensor).view_source] = cached_tensor;
-                input_tensor->view_src                                      = cached_tensor;
-                input_tensor->buffer                                        = nullptr;
-                input_tensor->data                                          = cached_tensor->data == nullptr
-                                                                                  ? nullptr
-                                                                                  : static_cast<void*>(static_cast<char*>(cached_tensor->data) +
-                                                                                                       input_tensor->view_offs);
-                input_tensor->extra                                         = cached_tensor->extra;
+                cached_view_sources[input_tensor->view_src] = cached_tensor;
+                input_tensor->view_src                      = cached_tensor;
+                input_tensor->buffer                        = nullptr;
+                input_tensor->data                          = cached_tensor->data == nullptr
+                                                                  ? nullptr
+                                                                  : static_cast<void*>(static_cast<char*>(cached_tensor->data) +
+                                                                                       input_tensor->view_offs);
+                input_tensor->extra                         = cached_tensor->extra;
             } else {
                 input_tensor->buffer = cached_tensor->buffer;
                 input_tensor->data   = cached_tensor->data;
@@ -127,7 +142,7 @@ namespace sd {
         // ggml flattens view chains, so descendants also need the cached root.
         for (int node_index : segment.internal_node_indices) {
             ggml_tensor* node  = ggml_graph_node(graph_, node_index);
-            auto cached_source = cached_view_sources.find(topology_.at(node).view_source);
+            auto cached_source = cached_view_sources.find(node->view_src);
             if (cached_source != cached_view_sources.end()) {
                 node->view_src = cached_source->second;
             }
