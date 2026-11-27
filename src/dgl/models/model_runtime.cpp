@@ -104,6 +104,7 @@ namespace sd::dgl::models {
         if (model == nullptr) {
             return true;
         }
+        model->set_linear_i8_enabled(params.linear_i8);
         // Keep tensor metadata alive until ModelManager unregisters the resource.
         Model::RunnerRegistration registration{[model] { model->runner_end(); }, {}};
         if constexpr (std::is_base_of_v<GGMLRunner, T> || std::is_same_v<T, Conditioner> ||
@@ -217,6 +218,7 @@ namespace sd::dgl::models {
             split_device_limits.emplace_back(backend, 0);
         }
         model_.model_weights->set_split_buffer_type(main_backend, split_buft, split_device_limits);
+        model->set_linear_i8_enabled(false);
 
         std::map<std::string, ggml_tensor*> split_tensors;
         if constexpr (std::is_base_of_v<Conditioner, T>) {

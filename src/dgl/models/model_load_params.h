@@ -25,6 +25,7 @@ namespace sd::dgl::models {
         OperatorMode flash_attn_mode  = OperatorMode::Auto;
         OperatorMode conv_direct_mode = OperatorMode::Auto;
         bool sage_attn                = false;
+        bool linear_i8                = false;
         float conv_scale              = 0.f;
         float linear_scale            = 0.f;
         float attn_scale              = 0.f;

@@ -3,6 +3,7 @@
 
 #include <cinttypes>
 #include <cmath>
+#include <functional>
 #include <iomanip>
 #include <iterator>
 #include <limits>
@@ -170,7 +171,13 @@ public:
     virtual void set_graph_cut_layer_split_enabled(bool enabled) {}
     virtual void set_graph_cut_layer_split_backend_vram_limits(const std::vector<size_t>& limits) {}
     virtual void get_layer_split_param_tensors(std::map<std::string, ggml_tensor*>& tensors) {}
-    virtual void set_flash_attention_enabled(bool enabled) = 0;
+    virtual void for_each_runner(const std::function<void(GGMLRunner&)>& visit) = 0;
+    void set_flash_attention_enabled(bool enabled) {
+        for_each_runner([enabled](GGMLRunner& runner) { runner.set_flash_attention_enabled(enabled); });
+    }
+    void set_linear_i8_enabled(bool enabled) {
+        for_each_runner([enabled](GGMLRunner& runner) { runner.set_linear_i8_enabled(enabled); });
+    }
     virtual void set_scale_overrides(float linear_scale, float attn_scale) {}
     virtual void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) {}
     virtual void runner_end() {}
@@ -257,10 +264,10 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         }
     }
 
-    void set_flash_attention_enabled(bool enabled) override {
-        text_model->set_flash_attention_enabled(enabled);
+    void for_each_runner(const std::function<void(GGMLRunner&)>& visit) override {
+        visit(*text_model);
         if (sd_version_is_sdxl(version)) {
-            text_model2->set_flash_attention_enabled(enabled);
+            visit(*text_model2);
         }
     }
 
@@ -785,15 +792,15 @@ struct SD3CLIPEmbedder : public Conditioner {
         }
     }
 
-    void set_flash_attention_enabled(bool enabled) override {
+    void for_each_runner(const std::function<void(GGMLRunner&)>& visit) override {
         if (clip_l) {
-            clip_l->set_flash_attention_enabled(enabled);
+            visit(*clip_l);
         }
         if (clip_g) {
-            clip_g->set_flash_attention_enabled(enabled);
+            visit(*clip_g);
         }
         if (t5) {
-            t5->set_flash_attention_enabled(enabled);
+            visit(*t5);
         }
     }
 
@@ -1216,12 +1223,12 @@ struct FluxCLIPEmbedder : public Conditioner {
         }
     }
 
-    void set_flash_attention_enabled(bool enabled) override {
+    void for_each_runner(const std::function<void(GGMLRunner&)>& visit) override {
         if (clip_l) {
-            clip_l->set_flash_attention_enabled(enabled);
+            visit(*clip_l);
         }
         if (t5) {
-            t5->set_flash_attention_enabled(enabled);
+            visit(*t5);
         }
     }
 
@@ -1501,9 +1508,9 @@ struct T5CLIPEmbedder : public Conditioner {
         }
     }
 
-    void set_flash_attention_enabled(bool enabled) override {
+    void for_each_runner(const std::function<void(GGMLRunner&)>& visit) override {
         if (t5) {
-            t5->set_flash_attention_enabled(enabled);
+            visit(*t5);
         }
     }
 
@@ -1722,9 +1729,9 @@ struct MiniT2IConditioner : public Conditioner {
         }
     }
 
-    void set_flash_attention_enabled(bool enabled) override {
+    void for_each_runner(const std::function<void(GGMLRunner&)>& visit) override {
         if (t5) {
-            t5->set_flash_attention_enabled(enabled);
+            visit(*t5);
         }
     }
 
@@ -1789,9 +1796,7 @@ struct SenseNovaU1Conditioner : public Conditioner {
         SD_UNUSED(tensors);
     }
 
-    void set_flash_attention_enabled(bool enabled) override {
-        SD_UNUSED(enabled);
-    }
+    void for_each_runner(const std::function<void(GGMLRunner&)>&) override {}
 
     SDCondition tokenize_condition(const std::string& text) {
         std::vector<int> tokens;
@@ -1869,8 +1874,8 @@ struct AnimaConditioner : public Conditioner {
         llm->get_param_tensors(tensors, "text_encoders.llm");
     }
 
-    void set_flash_attention_enabled(bool enabled) override {
-        llm->set_flash_attention_enabled(enabled);
+    void for_each_runner(const std::function<void(GGMLRunner&)>& visit) override {
+        visit(*llm);
     }
 
     void set_scale_overrides(float linear_scale, float attn_scale) override {
@@ -2193,16 +2198,16 @@ struct LLMEmbedder : public Conditioner {
         }
     }
 
-    void set_flash_attention_enabled(bool enabled) override {
-        llm->set_flash_attention_enabled(enabled);
+    void for_each_runner(const std::function<void(GGMLRunner&)>& visit) override {
+        visit(*llm);
         if (ph3_connector) {
-            ph3_connector->set_flash_attention_enabled(enabled);
+            visit(*ph3_connector);
         }
         if (clipproj_connector) {
-            clipproj_connector->set_flash_attention_enabled(enabled);
+            visit(*clipproj_connector);
         }
         if (byt5) {
-            byt5->set_flash_attention_enabled(enabled);
+            visit(*byt5);
         }
     }
 
@@ -3523,7 +3528,7 @@ struct MingImageEmbedder : public Conditioner {
     void get_layer_split_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         text_model->get_param_tensors(tensors, prefix);
     }
-    void set_flash_attention_enabled(bool enabled) override { text_model->set_flash_attention_enabled(enabled); }
+    void for_each_runner(const std::function<void(GGMLRunner&)>& visit) override { visit(*text_model); }
     void set_max_graph_vram_bytes(size_t bytes) override { text_model->set_max_graph_vram_bytes(bytes); }
     void set_runtime_backends(const std::vector<ggml_backend_t>& backends) override { text_model->set_runtime_backends(backends); }
     void set_graph_cut_layer_split_enabled(bool enabled) override { text_model->set_graph_cut_layer_split_enabled(enabled); }
@@ -3703,12 +3708,12 @@ struct LLaDAImageEmbedder : public Conditioner {
         llm->get_param_tensor_ops(tensor_ops);
     }
 
-    void set_flash_attention_enabled(bool enabled) override {
-        llm->set_flash_attention_enabled(enabled);
-        query_former->set_flash_attention_enabled(enabled);
-        text_projection->set_flash_attention_enabled(enabled);
+    void for_each_runner(const std::function<void(GGMLRunner&)>& visit) override {
+        visit(*llm);
+        visit(*query_former);
+        visit(*text_projection);
         if (sigvq != nullptr) {
-            sigvq->set_flash_attention_enabled(enabled);
+            visit(*sigvq);
         }
     }
 
@@ -3897,10 +3902,10 @@ struct LTXAVEmbedder : public Conditioner {
         connectors->model.get_param_tensor_ops(tensor_ops);
     }
 
-    void set_flash_attention_enabled(bool enabled) override {
-        llm->set_flash_attention_enabled(enabled);
-        projector->set_flash_attention_enabled(enabled);
-        connectors->set_flash_attention_enabled(enabled);
+    void for_each_runner(const std::function<void(GGMLRunner&)>& visit) override {
+        visit(*llm);
+        visit(*projector);
+        visit(*connectors);
     }
 
     void set_scale_overrides(float linear_scale, float attn_scale) override {

@@ -109,6 +109,7 @@ std::string sd_backend_resolve_name(const std::string& name);
 bool sd_parse_backend_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error);
 bool sd_parse_flash_attention_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error);
 bool sd_parse_conv_direct_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error);
+bool sd_parse_linear_type_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error);
 const char* sd_backend_module_name(SDBackendModule module);
 void ggml_ext_im_set_f32_1d(const struct ggml_tensor* tensor, int i, float value);
 bool add_rpc_devices(const std::string& servers);

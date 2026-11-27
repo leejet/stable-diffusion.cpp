@@ -45,6 +45,7 @@ namespace sd::dgl {
         params.flash_attn_mode  = modes.at(trim(get_string(args, "flash_attn_mode")));
         params.conv_direct_mode = modes.at(trim(get_string(args, "conv_direct_mode")));
         params.sage_attn        = get_bool(args, "sage_attn");
+        params.linear_i8        = get_string(args, "linear_type") == "i8";
         params.conv_scale       = float(get_number(args, "conv_scale"));
         params.linear_scale     = float(get_number(args, "linear_scale"));
         params.attn_scale       = float(get_number(args, "attn_scale"));
@@ -79,6 +80,7 @@ namespace sd::dgl {
             {"flash_attn_mode", int(params.flash_attn_mode)},
             {"conv_direct_mode", int(params.conv_direct_mode)},
             {"sage_attn", params.sage_attn},
+            {"linear_i8", params.linear_i8},
             {"conv_scale", params.conv_scale},
             {"linear_scale", params.linear_scale},
             {"attn_scale", params.attn_scale},

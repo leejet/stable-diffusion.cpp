@@ -193,6 +193,7 @@ GGMLRunnerContext GGMLRunner::get_context(ggml_cgraph* graph) {
     runner_ctx.backend               = runtime_backend;
     runner_ctx.flash_attn_enabled    = flash_attn_enabled;
     runner_ctx.sage_attn_enabled     = sage_attn_enabled;
+    runner_ctx.requantize_to_i8      = requantize_to_i8;
     runner_ctx.conv_scale            = conv_scale;
     runner_ctx.linear_scale          = linear_scale;
     runner_ctx.attn_scale            = attn_scale;

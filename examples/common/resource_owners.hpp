@@ -324,14 +324,15 @@ static inline bool generate_sd_video(sd_ctx_t* ctx, const SDOptPtr& opt, sd_resu
     return opt && sd_generate_video(ctx, opt.get(), result) == SD_STATUS_OK;
 }
 
-static inline sd_upscaler_t* create_sd_upscaler(const char* path, std::optional<bool> direct, std::optional<int> threads, std::optional<int> tile, const char* backend, const char* params_backend) {
+static inline sd_upscaler_t* create_sd_upscaler(const char* path, std::optional<bool> direct, std::optional<int> threads, std::optional<int> tile, const char* backend, const char* params_backend, const std::optional<std::string>& linear_type) {
     SDOptPtr opt(sd_upscaler_opt_create());
     if (!opt || sd_opt_set_string(opt.get(), "model_path", path) != SD_STATUS_OK ||
         (direct && sd_opt_set_bool(opt.get(), "conv_direct", *direct) != SD_STATUS_OK) ||
         (tile && sd_opt_set_int(opt.get(), "tile_size", *tile) != SD_STATUS_OK) ||
         (threads && sd_opt_set_int(opt.get(), "n_threads", *threads) != SD_STATUS_OK) ||
         (backend && sd_opt_set_string(opt.get(), "backend", backend) != SD_STATUS_OK) ||
-        (params_backend && sd_opt_set_string(opt.get(), "params_backend", params_backend) != SD_STATUS_OK))
+        (params_backend && sd_opt_set_string(opt.get(), "params_backend", params_backend) != SD_STATUS_OK) ||
+        (linear_type && sd_opt_set_string(opt.get(), "linear_type", linear_type->c_str()) != SD_STATUS_OK))
         return nullptr;
     sd_upscaler_t* result = nullptr;
     sd_upscaler_create(opt.get(), &result);

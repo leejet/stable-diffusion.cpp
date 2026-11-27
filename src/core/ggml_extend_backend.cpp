@@ -850,6 +850,25 @@ bool sd_parse_conv_direct_assignment(const std::string& spec, SDBackendAssignmen
     return parse_operation_assignment(spec, assignment, error, true);
 }
 
+bool sd_parse_linear_type_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error) {
+    if (!sd_parse_backend_assignment(spec, assignment, error)) {
+        return false;
+    }
+    const auto valid_mode = [](const std::string& mode) {
+        return mode == "auto" || mode == "i8" || mode == "raw";
+    };
+    if (assignment->empty() ||
+        (!assignment->default_name.empty() && !valid_mode(assignment->default_name)) ||
+        !std::all_of(assignment->module_names.begin(), assignment->module_names.end(),
+                     [&](const auto& entry) { return valid_mode(entry.second); })) {
+        if (error) {
+            *error = "linear_type expects auto, i8, raw, or module assignments such as dit=i8";
+        }
+        return false;
+    }
+    return true;
+}
+
 bool SDBackendAssignment::empty() const {
     return default_name.empty() && module_names.empty();
 }

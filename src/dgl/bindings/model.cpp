@@ -20,8 +20,9 @@ namespace sd::dgl {
             trim(get_string(args, "params_backend")),
             get_bool(args, "direct"),
             int(get_int(args, "tile_size")),
+            get_string(args, "linear_type") == "i8",
         };
-        prepared.key  = {{"path", params.path}, {"backend", params.backend}, {"params_backend", params.params_backend}, {"direct", params.direct}, {"tile_size", params.tile_size}};
+        prepared.key  = {{"path", params.path}, {"backend", params.backend}, {"params_backend", params.params_backend}, {"direct", params.direct}, {"tile_size", params.tile_size}, {"linear_i8", params.linear_i8}};
         prepared.load = [params = std::move(params)](ResourceLoadRequest& request) mutable {
             auto model = request.context.make_model<models::ImageUpscaler>(request.weights_key);
             if (!model->init(std::move(params)))
@@ -54,8 +55,9 @@ namespace sd::dgl {
             file_key(get_string(args, "path"), prepared.revision),
             trim(get_string(args, "backend")),
             trim(get_string(args, "params_backend")),
+            get_string(args, "linear_type") == "i8",
         };
-        prepared.key  = {{"path", params.path}, {"backend", params.backend}, {"params_backend", params.params_backend}};
+        prepared.key  = {{"path", params.path}, {"backend", params.backend}, {"params_backend", params.params_backend}, {"linear_i8", params.linear_i8}};
         prepared.load = [params = std::move(params)](ResourceLoadRequest& request) mutable {
             auto model = request.context.make_model<models::DetailDetector>(request.weights_key);
             if (!model->init(std::move(params)))

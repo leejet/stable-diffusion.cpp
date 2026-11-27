@@ -64,7 +64,10 @@ namespace sd::dgl::models {
         }
         model = build_image_upscale_model(model_weights, backend_manager, std::move(loader), params_.path,
                                           params_.direct, model_data_type);
-        return model != nullptr && load_weights_eagerly();
+        if (!model)
+            return false;
+        model->runner()->set_linear_i8_enabled(params_.linear_i8);
+        return load_weights_eagerly();
     }
 
     sd::Tensor<float> ImageUpscaler::upscale_tensor(const sd::Tensor<float>& input_tensor) {

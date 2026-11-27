@@ -1,0 +1,246 @@
+#version 450
+
+#ifdef SUBGROUP_MAX
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#endif
+#ifdef Q8_HALFWORDS
+#extension GL_EXT_shader_16bit_storage : require
+#endif
+
+#ifdef Q8_RETAIN
+#extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_EXT_control_flow_attributes : require
+layout(local_size_x = 256) in;
+layout(constant_id = 0) const uint cached_groups = 4;
+#else
+layout(local_size_x = 128) in;
+#endif
+
+layout(push_constant) uniform Parameters {
+    uint words_per_row;
+    uint rows;
+    uint scale_offset;
+}
+p;
+
+#ifdef Q8_0
+layout(binding = 0, std430) readonly buffer Source {
+#ifdef Q8_HALFWORDS
+    uint16_t source_halfwords[];
+#else
+    uint source_words[];
+#endif
+};
+#else
+layout(binding = 0, std430) readonly buffer Source {
+    vec4 source_values[];
+};
+#endif
+
+layout(binding = 1, std430) writeonly buffer Output {
+    uint packed[];
+};
+
+#ifdef SUBGROUP_MAX
+shared float maxima[gl_WorkGroupSize.x / 32];
+#else
+shared float maxima[gl_WorkGroupSize.x];
+#endif
+
+#ifdef Q8_0
+ivec4 load_q8(const uint row, const uint word, out float scale) {
+    // Each GGML block stores a half scale followed by 32 signed bytes.
+    const uint block = row * (p.words_per_row / 8) + word / 8;
+#ifdef Q8_HALFWORDS
+    const uint halfword       = block * 17;
+    const uint value_halfword = halfword + 1 + (word % 8) * 2;
+    const uint scale_bits     = uint(source_halfwords[halfword]);
+    const uint values         = uint(source_halfwords[value_halfword]) | (uint(source_halfwords[value_halfword + 1]) << 16);
+#else
+    const uint block_byte = block * 34;
+    const uint scale_bits = source_words[block_byte / 4] >> ((block_byte & 2) * 8);
+    const uint value_byte = block_byte + 2 + (word % 8) * 4;
+    uint values           = source_words[value_byte / 4];
+    if ((value_byte & 2) != 0) {
+        values = (values >> 16) | (source_words[value_byte / 4 + 1] << 16);
+    }
+#endif
+    scale           = unpackHalf2x16(scale_bits).x;
+    const int bytes = int(values);
+    return ivec4(bitfieldExtract(bytes, 0, 8), bitfieldExtract(bytes, 8, 8),
+                 bitfieldExtract(bytes, 16, 8), bitfieldExtract(bytes, 24, 8));
+}
+#endif
+
+vec4 load_values(const uint row, const uint word) {
+#ifdef Q8_0
+    float scale;
+    const ivec4 values = load_q8(row, word, scale);
+    return scale * vec4(values);
+#else
+    return source_values[row * p.words_per_row + word];
+#endif
+}
+
+#ifdef Q8_0
+vec4 rotate_word(vec4 x) {
+    return vec4(x.x + x.y + x.z - x.w, x.x + x.y - x.z + x.w,
+                x.x - x.y + x.z + x.w, -x.x + x.y + x.z + x.w);
+}
+
+vec4 rotate_four(vec4 a, vec4 b, vec4 c, vec4 d, uint i) {
+    if (i == 3)
+        a = -a;
+    if (i == 2)
+        b = -b;
+    if (i == 1)
+        c = -c;
+    if (i == 0)
+        d = -d;
+    return ((a + b) + c) + d;
+}
+#endif
+
+#ifdef Q8_RETAIN
+vec4 rotate_lanes(vec4 value, uint lane, uint stride) {
+    const uint first = lane & ~(3u * stride);
+    return rotate_four(subgroupShuffle(value, first), subgroupShuffle(value, first + stride),
+                       subgroupShuffle(value, first + 2 * stride), subgroupShuffle(value, first + 3 * stride),
+                       (lane / stride) % 4);
+}
+
+void rotate_subgroup(uint row, uint word, out vec4 lower, out vec4 upper) {
+    const uint lane  = gl_SubgroupInvocationID;
+    lower            = rotate_word(load_values(row, word) * (1.0 / 16.0));
+    upper            = rotate_word(load_values(row, word + 32) * (1.0 / 16.0));
+    lower            = rotate_lanes(rotate_lanes(lower, lane, 1), lane, 4);
+    upper            = rotate_lanes(rotate_lanes(upper, lane, 1), lane, 4);
+    const uint first = lane % 16;
+    const vec4 a     = subgroupShuffle(lower, first);
+    const vec4 b     = subgroupShuffle(lower, first + 16);
+    const vec4 c     = subgroupShuffle(upper, first);
+    const vec4 d     = subgroupShuffle(upper, first + 16);
+    lower            = rotate_four(a, b, c, d, lane / 16);
+    upper            = rotate_four(a, b, c, d, 2 + lane / 16);
+}
+#elif defined(Q8_0)
+shared vec4 rotation[2][gl_WorkGroupSize.x];
+
+vec4 rotate_group(const uint row, const uint word) {
+    const uint tid = gl_LocalInvocationID.x;
+    vec4 x         = vec4(0.0);
+    if (word < p.words_per_row)
+        x = load_values(row, word) * (1.0 / 16.0);
+    rotation[0][tid] = rotate_word(x);
+    barrier();
+    // One H256 group occupies 64 consecutive vec4 values.
+    for (uint stride = 1, stage = 0; stride < 64; stride *= 4, ++stage) {
+        const uint base                = tid & ~(3u * stride);
+        const uint i                   = (tid / stride) % 4;
+        rotation[(stage + 1) % 2][tid] = rotate_four(rotation[stage % 2][base], rotation[stage % 2][base + stride],
+                                                     rotation[stage % 2][base + 2 * stride], rotation[stage % 2][base + 3 * stride], i);
+        barrier();
+    }
+    return rotation[1][tid];
+}
+#endif
+
+void pack_word(uint row, uint word, vec4 values, float inverse) {
+    const ivec4 quantized                = ivec4(roundEven(clamp(values * inverse, -127.0, 127.0)));
+    const uvec4 bytes                    = uvec4(quantized) & 255u;
+    packed[row * p.words_per_row + word] = bytes.x | (bytes.y << 8) | (bytes.z << 16) | (bytes.w << 24);
+}
+
+void pack_row(const uint row) {
+    const uint tid = gl_LocalInvocationID.x;
+    float maximum  = 0.0;
+#ifdef Q8_RETAIN
+    // One 32-lane subgroup owns an H256 group, with two vec4 values per lane.
+    const uint subgroups = gl_WorkGroupSize.x / 32;
+    const uint groups    = p.words_per_row / 64;
+    vec4 lower[cached_groups], upper[cached_groups];
+    [[unroll]] for (uint slot = 0; slot < cached_groups; ++slot) {
+        const uint group = gl_SubgroupID + slot * subgroups;
+        if (group >= groups)
+            continue;
+        rotate_subgroup(row, group * 64 + gl_SubgroupInvocationID, lower[slot], upper[slot]);
+        const vec4 peak = max(abs(lower[slot]), abs(upper[slot]));
+        maximum         = max(maximum, max(max(peak.x, peak.y), max(peak.z, peak.w)));
+    }
+#elif defined(Q8_0)
+    for (uint first = 0; first < p.words_per_row; first += gl_WorkGroupSize.x) {
+        const vec4 values = abs(rotate_group(row, first + tid));
+        maximum           = max(maximum, max(max(values.x, values.y), max(values.z, values.w)));
+    }
+#else
+    for (uint word = tid; word < p.words_per_row; word += gl_WorkGroupSize.x) {
+        const vec4 values = abs(load_values(row, word));
+        maximum           = max(maximum, max(max(values.x, values.y), max(values.z, values.w)));
+    }
+#endif
+#ifdef SUBGROUP_MAX
+    maximum = subgroupMax(maximum);
+    if (subgroupElect()) {
+        maxima[gl_SubgroupID] = maximum;
+    }
+    barrier();
+    if (tid == 0) {
+        for (uint i = 1; i < gl_WorkGroupSize.x / 32; ++i) {
+            maximum = max(maximum, maxima[i]);
+        }
+        maxima[0] = maximum;
+    }
+    barrier();
+#else
+    maxima[tid] = maximum;
+    barrier();
+    for (uint stride = gl_WorkGroupSize.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            maxima[tid] = max(maxima[tid], maxima[tid + stride]);
+        }
+        barrier();
+    }
+#endif
+
+    const float scale = maxima[0] / 127.0;
+    if (tid == 0) {
+        packed[p.scale_offset + row] = floatBitsToUint(scale);
+    }
+#ifdef Q8_0
+    const float inverse = maxima[0] == 0.0 ? 0.0 : 127.0 / maxima[0];
+#else
+    const float inverse = scale == 0.0 ? 0.0 : 1.0 / scale;
+#endif
+
+#ifdef Q8_RETAIN
+    [[unroll]] for (uint slot = 0; slot < cached_groups; ++slot) {
+        const uint group = gl_SubgroupID + slot * subgroups;
+        if (group >= groups)
+            continue;
+        const uint word = group * 64 + gl_SubgroupInvocationID;
+        pack_word(row, word, lower[slot], inverse);
+        pack_word(row, word + 32, upper[slot], inverse);
+    }
+#else
+#ifdef Q8_0
+    for (uint first = 0; first < p.words_per_row; first += gl_WorkGroupSize.x) {
+        const uint word   = first + tid;
+        const vec4 values = rotate_group(row, word);
+        if (word >= p.words_per_row)
+            continue;
+#else
+    for (uint word = tid; word < p.words_per_row; word += gl_WorkGroupSize.x) {
+        const vec4 values = load_values(row, word);
+#endif
+        pack_word(row, word, values, inverse);
+    }
+#endif
+    barrier();
+}
+
+void main() {
+    for (uint row = gl_WorkGroupID.x; row < p.rows; row += gl_NumWorkGroups.x) {
+        pack_row(row);
+    }
+}

@@ -44,7 +44,12 @@ namespace SD_CUDA_NAMESPACE {
             const ggml_tensor* shift      = nullptr;
             int64_t k, rows, stride, up_stride, gate_offset = 0, up_offset = 0;
             float eps = 0.f, scale = 1.f, bias = 0.f;
+            int group;
         };
+        static bool fused_group(int group) {
+            return group == 256 || group == 1;
+        }
+
         static bool vector_rms_input(const ggml_tensor* input, int64_t width) {
             if (width != 1024 && width != 2048 && width != 4096) {
                 return false;
@@ -56,17 +61,17 @@ namespace SD_CUDA_NAMESPACE {
             }
             return (reinterpret_cast<uintptr_t>(input->data) + offset) % 16 == 0;
         }
+
         static bool describe(ggml_tensor* const* nodes, int count, Operation& op) {
-            int group;
             const auto* first = nodes[0];
             const auto* quant = nodes[count - 1];
-            if (!sd_ggml_convrot_describe(quant, &group) || group != 256)
+            if (!sd_ggml_convrot_describe(quant, &op.group) || !fused_group(op.group))
                 return false;
             const auto* value = quant->src[0];
             op.k              = value->ne[0];
             op.rows           = ggml_nrows(value);
             op.input          = first->src[0];
-            if (!f32(op.input) || !f32(first) || op.k > INT_MAX || op.rows > INT_MAX)
+            if (!f32(op.input) || !f32(first) || op.k > INT_MAX || op.k % 256 || op.rows > INT_MAX)
                 return false;
             op.stride    = op.input->ne[0];
             op.up_stride = op.k;
@@ -129,6 +134,8 @@ namespace SD_CUDA_NAMESPACE {
                     return false;
             } else
                 return false;
+            if (op.group == 1 && (op.kind == SCALE || op.kind == NORM))
+                return false;
             for (int i = 0; i < count - 1; ++i) {
                 if (!f32(nodes[i]) || !ggml_are_same_shape(nodes[i], value))
                     return false;
@@ -168,7 +175,7 @@ namespace SD_CUDA_NAMESPACE {
             for (int i = 1; i < ggml_graph_n_nodes(graph); ++i) {
                 auto* quant = ggml_graph_node(graph, i);
                 int group;
-                if (!sd_ggml_convrot_describe(quant, &group) || group != 256)
+                if (!sd_ggml_convrot_describe(quant, &group) || !fused_group(group))
                     continue;
                 ggml_tensor* chain[6] = {};
                 int count             = 0;
@@ -250,13 +257,13 @@ namespace SD_CUDA_NAMESPACE {
             const auto x = reinterpret_cast<uintptr_t>(a->data), y = reinterpret_cast<uintptr_t>(b->data);
             return x <= y ? y - x < ggml_nbytes(a) : x - y < ggml_nbytes(b);
         }
-        template <bool Swiglu = false, bool Normalize = false, bool Scaled = false, bool Sigmoid = false, bool RMS = false, bool Modulate = false, bool Situ = false, bool Gelu = false, bool RMSVec = false>
-        static CUDAError launch(Plan& p, const Operation& op, int8_t* output, CUDAStream stream) {
+        template <bool Rotate, bool Swiglu, bool Normalize, bool Scaled, bool Sigmoid, bool RMS, bool Modulate, bool Situ, bool Gelu, bool RMSVec>
+        static CUDAError launch_quantize(Plan& p, const Operation& op, int8_t* output, CUDAStream stream) {
             constexpr bool warp = Scaled || RMS || Modulate || Gelu;
             constexpr int extra = Normalize ? 384 : RMS ? 256
                                                         : 128;
             if (!p.configured) {
-                auto status = cuda_set_shared_memory(quantize<Swiglu, false, Normalize, Scaled, warp, float, Sigmoid, RMS, Modulate, Situ, Gelu, RMSVec>,
+                auto status = cuda_set_shared_memory(quantize<Swiglu, false, Normalize, Scaled, warp, float, Sigmoid, RMS, Modulate, Situ, Gelu, RMSVec, Rotate>,
                                                      int(p.device.shared_memory - extra));
                 if (status != cuda_success)
                     return status;
@@ -269,10 +276,18 @@ namespace SD_CUDA_NAMESPACE {
                                                                                                                             : 256;
             const int64_t padded = (op.rows + 3) / 4 * 4;
             auto data            = [](const ggml_tensor* t) { return t ? static_cast<const float*>(t->data) : nullptr; };
-            quantize<Swiglu, false, Normalize, Scaled, warp, float, Sigmoid, RMS, Modulate, Situ, Gelu, RMSVec><<<unsigned(op.rows), threads, size_t(op.k) * sizeof(float), stream>>>(
+            quantize<Swiglu, false, Normalize, Scaled, warp, float, Sigmoid, RMS, Modulate, Situ, Gelu, RMSVec, Rotate><<<unsigned(op.rows), threads, size_t(op.k) * sizeof(float), stream>>>(
                 data(op.input) + op.gate_offset, output, reinterpret_cast<float*>(output + op.k * padded), op.k, op.rows, op.k,
                 op.up ? data(op.up) + op.up_offset : nullptr, op.stride, op.up_stride, nullptr, nullptr, data(op.modulation), op.eps, op.scale, op.bias, data(op.weight), data(op.shift));
             return cuda_last_error();
+        }
+        template <bool Swiglu = false, bool Normalize = false, bool Scaled = false, bool Sigmoid = false, bool RMS = false, bool Modulate = false, bool Situ = false, bool Gelu = false, bool RMSVec = false>
+        static CUDAError launch(Plan& p, const Operation& op, int8_t* output, CUDAStream stream) {
+            if constexpr (Swiglu || RMS || Modulate || Gelu) {
+                if (op.group == 1)
+                    return launch_quantize<false, Swiglu, Normalize, Scaled, Sigmoid, RMS, Modulate, Situ, Gelu, RMSVec>(p, op, output, stream);
+            }
+            return launch_quantize<true, Swiglu, Normalize, Scaled, Sigmoid, RMS, Modulate, Situ, Gelu, RMSVec>(p, op, output, stream);
         }
         static ggml_status execute(const ggml_ext_execution_context* execution, ggml_tensor* const* nodes, int count, void* state, void*) {
             auto& plan     = *static_cast<Plan*>(state);

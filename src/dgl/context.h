@@ -69,6 +69,7 @@ namespace sd::dgl {
         Value cache_resource(ResourceKey identity, std::string revision, std::string lora_revision, ModelLoader::Dependencies dependencies, Value value, uint64_t last_use);
         bool auto_fit_ = true;
         models::ModelExecutionOptions model_execution_;
+        SDBackendAssignment linear_type_;
         size_t conditioning_cache_size_;
         void set_model_execution_option(const std::string& key, const std::string& value);
     };

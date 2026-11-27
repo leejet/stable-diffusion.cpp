@@ -79,6 +79,7 @@ struct GGMLRunnerContext {
     ggml_cgraph* graph                                               = nullptr;
     bool flash_attn_enabled                                          = false;
     bool sage_attn_enabled                                           = false;
+    bool requantize_to_i8                                            = false;
     float linear_scale                                               = 0.f;
     float conv_scale                                                 = 0.f;
     float attn_scale                                                 = 0.f;
@@ -169,6 +170,7 @@ protected:
 
     bool flash_attn_enabled    = false;
     bool sage_attn_enabled     = false;
+    bool requantize_to_i8      = false;
     float linear_scale         = 0.f;
     float conv_scale           = 0.f;
     float attn_scale           = 0.f;
@@ -315,6 +317,10 @@ public:
             execution_session_.clear_plan_cache();
             sage_attn_enabled = enabled;
         }
+    }
+
+    void set_linear_i8_enabled(bool enabled) {
+        requantize_to_i8 = enabled;
     }
 
     void set_scale_overrides(float linear_scale, float attn_scale, float conv_scale = 0.f) {

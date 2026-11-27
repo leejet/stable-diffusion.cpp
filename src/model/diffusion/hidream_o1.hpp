@@ -499,8 +499,8 @@ namespace HiDreamO1 {
             vision_runner->set_max_graph_vram_bytes(max_graph_vram_bytes);
         }
 
-        void set_flash_attention_enabled(bool enabled) override {
-            vision_runner->set_flash_attention_enabled(enabled);
+        void for_each_runner(const std::function<void(GGMLRunner&)>& visit) override {
+            visit(*vision_runner);
         }
 
         void set_scale_overrides(float linear_scale, float attn_scale) override {

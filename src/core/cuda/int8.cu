@@ -7,7 +7,7 @@
 struct SDI8CudaGemmPlan;
 #endif
 
-#include "runtime.h"
+#include "int8_common.h"
 #if defined(SD_CUDA_VENDOR_HIP)
 #include "hip_i8_gemm.h"
 #elif !defined(SD_CUDA_VENDOR_MUSA)
@@ -20,13 +20,10 @@ struct SDI8CudaGemmPlan;
 
 namespace SD_CUDA_NAMESPACE {
     namespace sd_i8_cuda {
-        template <int Width = 32>
-        static __device__ __forceinline__ float warp_reduce_max(float value) {
-#pragma unroll
-            for (int offset = Width / 2; offset > 0; offset >>= 1)
-                value = fmaxf(value, cuda_shuffle_xor(value, offset, Width));
-            return value;
-        }
+        using i8::aligned;
+        using i8::blas_supported;
+        using i8::warp_reduce_max;
+
         static __global__ void quantize_rowwise_i8_cuda(const float* src, int8_t* dst, float* scales, int64_t k, int64_t rows) {
             const int64_t row = blockIdx.x;
             const int tid     = threadIdx.x;
@@ -439,16 +436,6 @@ namespace SD_CUDA_NAMESPACE {
         }
 #endif
 
-        static bool aligned(const ggml_tensor* tensor, size_t alignment = 4) {
-            if (!tensor)
-                return true;
-            size_t offset = 0;
-            while (tensor->view_src) {
-                offset += tensor->view_offs;
-                tensor = tensor->view_src;
-            }
-            return (reinterpret_cast<uintptr_t>(tensor->data) + offset) % alignment == 0;
-        }
         static __global__ void mul_mat_i8_dot(const int* weights, const int* activations, int* output, int64_t words, int64_t n, int64_t rows) {
             constexpr int tile  = 32;
             constexpr int slice = 8;
@@ -516,11 +503,6 @@ namespace SD_CUDA_NAMESPACE {
                 static_cast<const float*>(op.codebook->data),
                 static_cast<const uint8_t*>(op.relative_scale->data) + first * groups_per_col, decoded, groups);
             return cuda_last_error();
-        }
-
-        static bool blas_supported(ggml_backend_dev_t device, const ggml_ext_gpu_device_info& info, int64_t n) {
-            return info.int8_blas && n % 4 == 0 &&
-                   ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(device), "ggml_ext_gpu_blas_v1");
         }
 
         static bool supports(ggml_backend_dev_t device, const ggml_tensor* node, void*) {
@@ -596,7 +578,7 @@ namespace SD_CUDA_NAMESPACE {
             return disabled;
         }
 #ifdef SD_CUDA_I8_CUTLASS
-        static int64_t w4a8_chunk_cols(int64_t k) {
+        static int64_t decoded_chunk_cols(int64_t k) {
             constexpr int64_t decoded_bytes = 16 * 1024 * 1024;
             constexpr int64_t alignment     = 256;
             return std::max(alignment, decoded_bytes / k / alignment * alignment);
@@ -663,7 +645,7 @@ namespace SD_CUDA_NAMESPACE {
             if (!supports(device, mat, nullptr) || !sd_ggml_i8_describe(mat, &op) || !op.weight_scale || op.bias)
                 return 0;
 #ifdef SD_CUDA_I8_CUTLASS
-            if (op.codebook && mat->ne[0] > w4a8_chunk_cols(op.k()))
+            if (op.codebook && mat->ne[0] > decoded_chunk_cols(op.k()))
                 return 0;
 #endif
             const auto* next = ggml_graph_node(g, first + 1);
@@ -735,8 +717,8 @@ namespace SD_CUDA_NAMESPACE {
             bool situ             = false;
         };
 #ifdef SD_CUDA_I8_CUTLASS
-        static void prepare_w4a8_chunks(ggml_backend_dev_t device, Plan& p, size_t& workspace) {
-            const int64_t cols = w4a8_chunk_cols(p.k);
+        static void prepare_decoded_chunks(ggml_backend_dev_t device, Plan& p, size_t& workspace) {
+            const int64_t cols = decoded_chunk_cols(p.k);
             if (p.n <= cols || p.n % 128)
                 return;
             size_t chunk_bytes = 0, tail_bytes = 0;
@@ -792,7 +774,7 @@ namespace SD_CUDA_NAMESPACE {
                 if (p->use_blas && cutlass_compatible(op, dst) && (!op.bias || p->kind == MAT) &&
                     (p->kind != CONCAT || ggml_nbytes(dst->src[0]) % 16 == 0)) {
                     if (op.codebook && p->kind == MAT)
-                        prepare_w4a8_chunks(device, *p, gemm_bytes);
+                        prepare_decoded_chunks(device, *p, gemm_bytes);
                     if (p->kind == GATED || p->kind == SWIGLU_QUANTIZE) {
                         const auto activation = p->situ ? SDI8GemmActivation::Situ : SDI8GemmActivation::Swiglu;
                         p->gemm               = sd_cuda_i8_gemm_prepare(device, p->rows, p->n, p->k, activation, &gemm_bytes);
@@ -857,6 +839,33 @@ namespace SD_CUDA_NAMESPACE {
         }
 #endif
 #ifdef SD_CUDA_I8_CUTLASS
+        static void split_optimize(ggml_backend_dev_t device, ggml_cgraph* graph, void*) {
+            if (fusion_disabled())
+                return;
+            for (int i = 3; i < ggml_graph_n_nodes(graph); ++i) {
+                auto* glu = ggml_graph_node(graph, i);
+                if (glu->op != GGML_OP_GLU || !glu->src[1])
+                    continue;
+                auto* second = ggml_graph_node(graph, i - 1);
+                if (second != glu->src[0] && second != glu->src[1])
+                    continue;
+                auto* first = second == glu->src[0] ? glu->src[1] : glu->src[0];
+                if (ggml_graph_node(graph, i - 2) == first)
+                    continue;
+                ggml_tensor* nodes[] = {first, second, glu};
+                SDI8Operation gate, up;
+                if (!split_describe(device, nodes, gate, up))
+                    continue;
+                // Preparing the second weight can separate the two projections in the graph.
+                for (int j = i - 3; j >= std::max(0, i - 32); --j) {
+                    if (ggml_graph_node(graph, j) == first) {
+                        ggml_ext_graph_delay(graph, j, 1, i - 1);
+                        break;
+                    }
+                }
+            }
+        }
+
         static int split_match(ggml_backend_dev_t device, const ggml_cgraph* graph, int first, void*) {
             auto* g = const_cast<ggml_cgraph*>(graph);
             if (fusion_disabled() || first + 2 >= ggml_graph_n_nodes(g))
@@ -1331,6 +1340,7 @@ namespace SD_CUDA_NAMESPACE {
         desc.priority  = 260;
         desc.supports  = nullptr;
         desc.match     = sd_i8_cuda::split_match;
+        desc.optimize  = sd_i8_cuda::split_optimize;
         desc.prepare   = sd_i8_cuda::split_prepare;
         desc.execute   = sd_i8_cuda::split_execute;
         desc.destroy   = sd_i8_cuda::split_destroy;

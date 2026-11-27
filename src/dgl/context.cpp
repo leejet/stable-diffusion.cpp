@@ -124,6 +124,12 @@ namespace sd::dgl {
             if (!parse_strict_bool(value, enabled))
                 throw std::runtime_error("embed_metadata expects a boolean");
             embed_metadata = enabled;
+        } else if (key == "linear_type") {
+            SDBackendAssignment assignment;
+            std::string error;
+            if (!sd_parse_linear_type_assignment(value, &assignment, &error))
+                throw Error(SD_STATUS_INVALID_ARGUMENT, error);
+            linear_type_ = std::move(assignment);
         } else if (key == "auto_fit") {
             if (!parse_strict_bool(value, auto_fit_))
                 throw std::runtime_error("auto_fit expects a boolean");
@@ -202,9 +208,14 @@ namespace sd::dgl {
         const auto& [name, operation] = registration;
         const auto kind               = operation.output.type.kind;
         nlohmann::json key            = {{"operation", name}};
-        auto prepared                 = operation.prepare(args);
-        key["params"]                 = std::move(prepared.key);
-        auto revision                 = std::move(prepared.revision);
+        if (operation.backend_module) {
+            const auto mode = linear_type_.get(*operation.backend_module);
+            if (!mode.empty())
+                args.insert_or_assign("linear_type", Value::literal(mode));
+        }
+        auto prepared = operation.prepare(args);
+        key["params"] = std::move(prepared.key);
+        auto revision = std::move(prepared.revision);
         ResourceKey identity{key.dump(), {}};
         auto argument_revision = revision.dump();
         const auto last_use    = ++resource_epoch;
