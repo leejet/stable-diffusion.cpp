@@ -176,7 +176,9 @@ Scripts are listed and saved in the server's working directory under
 are relative to the server's working directory. Model files and their
 dependencies must reside under one of the configured `--model-dir` roots.
 Write results under `output/` in the working directory. For example,
-`image::save("output/result.png", image)` saves a PNG.
+`image::save("output/result.png", image)` saves a PNG. Use `--output-dir` to
+redirect writable output to another directory; writes outside the resolved
+output directory are denied.
 
 ## Model management
 
