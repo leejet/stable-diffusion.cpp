@@ -342,12 +342,23 @@ static json make_capabilities_json(ServerRuntime& runtime) {
     result["generation_features"]        = generation_features;
     result["generation_model_selection"] = true;
     result["media_view"]                 = runtime.svr_params->media_view;
-    result["runtime"]                    = model_status(runtime);
-    result["current_mode"]               = current_mode;
-    result["supported_modes"]            = supported_modes;
-    result["defaults"]                   = top_level_defaults;
-    result["defaults_by_mode"]           = defaults_by_mode;
-    result["limits"]                     = {
+    if (runtime.svr_params->media_view && !runtime.svr_params->output_dir.empty()) {
+        const auto& output  = runtime.models->workspace_file_access.output;
+        auto paths          = json::array({output.generic_u8string()});
+        const auto relative = output.lexically_relative(fs::weakly_canonical(fs::current_path()));
+        if (!relative.empty())
+            paths.push_back(relative.generic_u8string());
+        result["media_output"] = {{"paths", std::move(paths)}};
+#ifdef _WIN32
+        result["media_output"]["case_insensitive"] = true;
+#endif
+    }
+    result["runtime"]          = model_status(runtime);
+    result["current_mode"]     = current_mode;
+    result["supported_modes"]  = supported_modes;
+    result["defaults"]         = top_level_defaults;
+    result["defaults_by_mode"] = defaults_by_mode;
+    result["limits"]           = {
         {"min_width", 64},
         {"max_width", k_max_generation_dimension},
         {"min_height", 64},

@@ -161,11 +161,11 @@ drag the timeline below it to seek. AVI path previews support MJPEG and
 uncompressed 24-bit RGB video with up to 64 MiB of PCM or 32-bit float audio.
 The speaker button mutes the preview. To adjust volume in an inline preview,
 hover or focus the speaker button to open the volume slider.
-Use a relative path under the server's working directory, such as
-`assets/reference.png` or `output/clip.webm`. Turn off **Media view** in the
-editor toolbar to hide the preview. The server previews files under `input/`,
-`output/`, and `assets/`. Start the server
-with `--no-media-view` to disable file previews at the server.
+The editor previews files under `input/`, `assets/`, and the configured output
+directory (`output/` by default). For example, use `assets/reference.png` or
+`output/clip.webm` with the default configuration. Turn off **Media view** in
+the editor toolbar to hide previews. Start the server with `--no-media-view`
+to disable file previews at the server.
 
 DGL jobs share an execution context for the lifetime of the server. Compatible
 scripts can reuse loaded model components across runs. The context can release
@@ -175,10 +175,14 @@ Scripts are listed and saved in the server's working directory under
 `dgl/` by default. Use `--dgl-dir` to select another directory. Script paths
 are relative to the server's working directory. Model files and their
 dependencies must reside under one of the configured `--model-dir` roots.
-Write results under `output/` in the working directory. For example,
+Write results under `output/` by default. For example,
 `image::save("output/result.png", image)` saves a PNG. Use `--output-dir` to
-redirect writable output to another directory; writes outside the resolved
-output directory are denied.
+choose a dedicated directory for DGL writes and previews. For example, start
+the server with `--model-dir ../models --output-dir renders` and use
+`image::save("renders/result.png", image)` to save and preview the PNG.
+Relative paths still resolve from the server's working directory. Absolute
+paths under the configured output directory also work. Writes outside that
+directory are denied.
 
 ## Model management
 
@@ -461,6 +465,7 @@ configured defaults.
 | `--listen-ip <ip>` | `127.0.0.1` | Server listen address |
 | `--listen-port <port>` | `1234` | Server listen port |
 | `--dgl-dir <path>` | `dgl` | Script directory for the DGL editor |
+| `--output-dir <path>` | `output` | Directory for DGL writes and output previews |
 | `--no-media-view` | Off | Disable the media view endpoint |
 | `--max-pending-jobs <count>` | `64` | Maximum async jobs queued or generating |
 | `--completed-ttl-seconds <seconds>` | `600` | Retention time for completed async jobs |
