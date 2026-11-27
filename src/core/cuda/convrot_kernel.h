@@ -46,7 +46,7 @@ namespace SD_CUDA_NAMESPACE {
             return __fmul_rn(__fmul_rn(a, 1.0f / (1.0f + expf(-gate))), b);
         }
 
-        template <bool swiglu, bool dequantize = false, bool normalize = false, bool scaled = false, bool warp_rotation = false, typename T = float, bool sigmoid_gate = false, bool rms_modulation = false, bool modulate = false, bool situ_gate = false>
+        template <bool swiglu, bool dequantize = false, bool normalize = false, bool scaled = false, bool warp_rotation = false, typename T = float, bool sigmoid_gate = false, bool rms_modulation = false, bool modulate = false, bool situ_gate = false, bool gelu = false, bool rms_vec = false>
         __global__ void quantize(
             const T* src,
             int8_t* dst,
@@ -81,12 +81,18 @@ namespace SD_CUDA_NAMESPACE {
             [[maybe_unused]] float rms_scale = 1.0f;
             if constexpr (rms_modulation) {
                 __shared__ float sums[32];
-                // Preserve the unfused RMSNorm's 1024-thread reduction order with fewer physical warps.
-                for (int virtual_tid = tid; virtual_tid < 1024; virtual_tid += blockDim.x) {
+                // Match the unfused RMSNorm reduction across a smaller physical block.
+                const int reduction_threads = rms_vec ? k / 4 : 1024;
+                for (int virtual_tid = tid; virtual_tid < reduction_threads; virtual_tid += blockDim.x) {
                     float partial = 0.0f;
-                    for (int64_t i = virtual_tid; i < k; i += 1024) {
-                        const float value = src_row[i];
-                        partial += value * value;
+                    if constexpr (rms_vec) {
+                        const float4 a = reinterpret_cast<const float4*>(src_row)[virtual_tid];
+                        partial        = a.x * a.x + a.y * a.y + a.z * a.z + a.w * a.w;
+                    } else {
+                        for (int64_t i = virtual_tid; i < k; i += 1024) {
+                            const float value = src_row[i];
+                            partial += value * value;
+                        }
                     }
                     partial = warp_reduce_sum(partial);
                     if (tid % 32 == 0) {
@@ -94,7 +100,8 @@ namespace SD_CUDA_NAMESPACE {
                     }
                 }
                 __syncthreads();
-                const float sum = warp_reduce_sum(sums[tid % 32]);
+                const int lane  = tid % 32;
+                const float sum = warp_reduce_sum(lane < reduction_threads / 32 ? sums[lane] : 0.f);
                 rms_scale       = rsqrtf(sum / k + eps);
             }
 
@@ -108,7 +115,10 @@ namespace SD_CUDA_NAMESPACE {
                         if constexpr (!swiglu) {
                             float value = src_row[i];
                             if constexpr (rms_modulation) {
-                                value = __fmul_rn(__fmul_rn(value, rms_scale), rms_weight[i]);
+                                value = __fmul_rn(value, rms_scale);
+                                if constexpr (!rms_vec) {
+                                    value = __fmul_rn(value, rms_weight[i]);
+                                }
                             }
                             if constexpr (rms_modulation || modulate) {
                                 value = __fadd_rn(value, __fmul_rn(value, modulation[i]));
@@ -118,6 +128,9 @@ namespace SD_CUDA_NAMESPACE {
                             }
                             if constexpr (scaled) {
                                 value = __fmaf_rn(value, input_scale, input_bias);
+                            }
+                            if constexpr (gelu) {
+                                value = 0.5f * value * (1.0f + tanhf(0.7978845608028654f * value * (1.0f + 0.044715f * value * value)));
                             }
                             v[j] = value * (1.0f / 16.0f);
                         } else {
@@ -260,7 +273,6 @@ namespace SD_CUDA_NAMESPACE {
                 dst_row[i] = (int8_t)value;
             }
         }
-
     }
 }
 #endif

@@ -1,9 +1,9 @@
 # Position embedding cache
 
 `sd::PECache` stores CPU-side `sd::Tensor<float>` data. Each model runner owns
-its cache and calls the existing `make_input()` on every graph build. Cache
-hits skip PE generation; allocation and upload remain ordinary graph-input
-operations. `GGMLRunner` has no PE-specific code or resource hooks.
+its cache. A cache hit skips PE generation, and `make_input()` submits the CPU
+data through ordinary graph-input allocation and upload. `GGMLRunner` has no
+PE-specific code or resource hooks.
 
 The cache keeps the most recent key and tensor for each named PE input. A
 matching key returns the existing tensor by reference. Changing its parameters
@@ -12,6 +12,12 @@ storage. Alternating two layouts under the same name recomputes their PE;
 there is no LRU, device-buffer cache, memory budget, or graph lifecycle callback.
 CPU data lives with the model runner, including across `runner_end()` calls,
 and is released when its named entry is replaced or the cache is destroyed.
+
+On CUDA, HIP, and MUSA, LTXAV retains large video RoPE tensors in the existing
+device runner cache during sampling. It stores each rotation as an FP32 2×2 matrix.
+The tensors count against the runner's device memory budget.
+The runner clears them when the position key changes or sampling ends. If
+allocation fails, it clears the device cache and retries with the CPU inputs.
 
 ## Adding a model
 

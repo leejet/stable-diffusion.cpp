@@ -112,9 +112,10 @@ namespace sd_i8_gated {
         using Residual     = cutlass::epilogue::threadblock::VisitorAuxLoad<Map, float, cute::Stride<int64_t, cute::_1, int64_t>>;
         using GateMul      = cutlass::epilogue::threadblock::VisitorCompute<MulRound, float, float, cutlass::FloatRoundStyle::round_to_nearest>;
         using Add          = cutlass::epilogue::threadblock::VisitorCompute<AddRound, float, float, cutlass::FloatRoundStyle::round_to_nearest>;
+        using WithBias     = cutlass::epilogue::threadblock::Sm80EVT<Add, ScaleW, Row>;
         using Scalar       = cutlass::epilogue::threadblock::VisitorScalarBroadcast<float>;
-        using ScaleOut     = cutlass::epilogue::threadblock::Sm80EVT<GateMul, ScaleW, Scalar>;
-        using Scaled       = std::conditional_t<scaled, ScaleOut, ScaleW>;
+        using ScaleOut     = cutlass::epilogue::threadblock::Sm80EVT<GateMul, WithBias, Scalar>;
+        using Scaled       = std::conditional_t<scaled, ScaleOut, WithBias>;
         using Gated        = cutlass::epilogue::threadblock::Sm80EVT<GateMul, Scaled, Row>;
         using WithResidual = cutlass::epilogue::threadblock::Sm80EVT<Add, Gated, Residual>;
         using Output       = WithResidual;
@@ -149,7 +150,6 @@ namespace sd_i8_gated {
     struct DeviceInfo {
         int ordinal        = -1;
         int major          = 0;
-        int minor          = 0;
         int sms            = 0;
         int threads_per_sm = 0;
         size_t shared      = 0;
@@ -167,7 +167,7 @@ namespace sd_i8_gated {
         int ordinal          = query ? query(device) : -1;
         cudaDeviceProp props = {};
         if (ordinal >= 0 && cudaGetDeviceProperties(&props, ordinal) == cudaSuccess)
-            info = {ordinal, props.major, props.minor, props.multiProcessorCount, props.maxThreadsPerMultiProcessor, size_t(props.sharedMemPerBlockOptin)};
+            info = {ordinal, props.major, props.multiProcessorCount, props.maxThreadsPerMultiProcessor, size_t(props.sharedMemPerBlockOptin)};
         cache.emplace(device, info);
         return info;
     }
@@ -211,19 +211,21 @@ namespace sd_i8_gated {
     }
     template <class Types>
     static typename Types::Gemm::Arguments arguments(const Operation& op, float* output, bool metadata) {
-        const auto* x                            = metadata ? nullptr : static_cast<const int8_t*>(op.mat.input->data);
-        const auto* w                            = metadata ? nullptr : static_cast<const int8_t*>(op.mat.weight->data);
-        const auto* xs                           = metadata ? nullptr : op.mat.packed ? reinterpret_cast<const float*>(x + op.k * ((op.rows + 3) / 4 * 4))
-                                                                                      : static_cast<const float*>(op.mat.input_scale->data);
-        const auto* ws                           = metadata ? nullptr : static_cast<const float*>(op.mat.weight_scale->data);
-        const auto* gate                         = metadata ? nullptr : static_cast<const float*>(op.gate->data);
-        auto* residual                           = metadata ? nullptr : static_cast<float*>(op.residual->data);
-        typename Types::ScaleW::Arguments scales = {{{}, {xs, 0.f, {}}, {}}, {ws, 0.f, {}}, {}};
+        const auto* x                                 = metadata ? nullptr : static_cast<const int8_t*>(op.mat.input->data);
+        const auto* w                                 = metadata ? nullptr : static_cast<const int8_t*>(op.mat.weight->data);
+        const auto* xs                                = metadata ? nullptr : op.mat.packed ? reinterpret_cast<const float*>(x + op.k * ((op.rows + 3) / 4 * 4))
+                                                                                           : static_cast<const float*>(op.mat.input_scale->data);
+        const auto* ws                                = metadata ? nullptr : static_cast<const float*>(op.mat.weight_scale->data);
+        const auto* bias                              = metadata || !op.mat.bias ? nullptr : static_cast<const float*>(op.mat.bias->data);
+        const auto* gate                              = metadata ? nullptr : static_cast<const float*>(op.gate->data);
+        auto* residual                                = metadata ? nullptr : static_cast<float*>(op.residual->data);
+        typename Types::ScaleW::Arguments scales      = {{{}, {xs, 0.f, {}}, {}}, {ws, 0.f, {}}, {}};
+        typename Types::WithBias::Arguments with_bias = {scales, {bias, -0.f, {}}, {}};
         typename Types::Scaled::Arguments scaled;
-        if constexpr (std::is_same<typename Types::Scaled, typename Types::ScaleW>::value)
-            scaled = scales;
+        if constexpr (std::is_same<typename Types::Scaled, typename Types::WithBias>::value)
+            scaled = with_bias;
         else
-            scaled = {scales, {{op.scale}}, {}};
+            scaled = {with_bias, {{op.scale}}, {}};
         typename Types::Epilogue::Arguments epilogue = {{{scaled, {gate, 0.f, {}}, {}}, {residual, 0.f, {op.n, cute::_1{}, op.rows * op.n}}, {}}, {output, {op.n, cute::_1{}, op.rows * op.n}}};
         return {cutlass::gemm::GemmUniversalMode::kGemm, {int(op.rows), int(op.n), int(op.k)}, 1, epilogue, x, w, nullptr, nullptr, op.rows * op.k, op.n * op.k, 0, 0, op.k, op.k, 0, 0};
     }
@@ -289,7 +291,16 @@ namespace sd_i8_gated {
         return op.rows >= 8192 ? configure<Config, false, true>(op, plan) : configure<Config, false, false>(op, plan);
     }
     static bool configure(const Operation& op, Plan& plan) {
-        if (plan.device.major == 8 && plan.device.minor == 9 && op.scale == 1.f &&
+        if (op.scale == 1.f &&
+            op.rows >= 8192 && op.n >= 2048 && op.n <= 4096 && op.k >= 4096) {
+            if (op.k >= 2 * op.n) {
+                if (configure<TileConfig<128, 256, 64, 3, 4>, false, false>(op, plan))
+                    return true;
+            } else if (configure<TileConfig<128, 128, 64>, false, true>(op, plan)) {
+                return true;
+            }
+        }
+        if (op.scale == 1.f &&
             op.rows >= 4096 && op.rows < 8192 && op.n == 3072 && (op.k == 3072 || op.k == 8192) &&
             configure<TileConfig<128, 128, 64, 3, 4>, false, false>(op, plan))
             return true;
@@ -332,7 +343,7 @@ namespace sd_i8_gated {
             const bool scaled    = producer->op == GGML_OP_SCALE;
             const auto* mat      = scaled ? producer->src[0] : producer;
             SDI8Operation op;
-            if (!sd_ggml_i8_describe(mat, &op) || op.codebook || op.input->type != GGML_TYPE_I8 || !op.weight_scale || op.bias)
+            if (!sd_ggml_i8_describe(mat, &op) || op.codebook || op.input->type != GGML_TYPE_I8 || !op.weight_scale)
                 continue;
             int scale_index = -1;
             for (int j = i - 1; j >= 0 && j >= i - 64; --j) {
@@ -362,7 +373,8 @@ namespace sd_i8_gated {
         for (int i = 0; i < std::min(available, 5); ++i)
             nodes[i] = ggml_graph_node(const_cast<ggml_cgraph*>(graph), first + i);
         SDI8Operation mat;
-        if (!sd_ggml_i8_describe(nodes[0], &mat) || mat.codebook || mat.input->type != GGML_TYPE_I8 || !mat.weight_scale || mat.bias)
+        if (!sd_ggml_i8_describe(nodes[0], &mat) || mat.codebook || mat.input->type != GGML_TYPE_I8 || !mat.weight_scale ||
+            (mat.bias && !aligned(mat.bias)))
             return 0;
         const int64_t rows = ggml_nrows(nodes[0]), n = nodes[0]->ne[0], k = mat.weight->ne[0];
         if (rows < (small_rows_enabled(rows, n, k) ? 1 : 128) || rows > INT_MAX || n > INT_MAX || k > INT_MAX || n % 128 || k % 64 ||
@@ -424,7 +436,7 @@ namespace sd_i8_gated {
     static bool needs_scratch(const ggml_tensor* dst, const Operation& op) {
         if (address(dst) % 16 != 0)
             return true;
-        for (const auto* input : {op.mat.weight, op.mat.input, op.mat.input_scale, op.mat.weight_scale, op.gate, op.residual, op.prefix}) {
+        for (const auto* input : {op.mat.weight, op.mat.input, op.mat.input_scale, op.mat.weight_scale, op.mat.bias, op.gate, op.residual, op.prefix}) {
             if (input == op.residual && !op.prefix && address(input) == address(dst))
                 continue;
             if (overlaps(dst, input))

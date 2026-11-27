@@ -381,7 +381,8 @@ static __device__ __forceinline__ float convrot_h4_cuda(float a, float b, float 
     return __fadd_rn(__fadd_rn(__fadd_rn(a, b), c), d);
 }
 
-static __global__ void quantize_attention(const half* src, int8_t* dst, float* scales, int64_t k, int64_t rows, float input_scale, float input_bias) {
+template <bool Gated>
+static __global__ void quantize_attention(const half* src, int8_t* dst, float* scales, int64_t k, int64_t rows, float input_scale, float input_bias, const float* gates, int head_shift) {
     const int64_t row = blockIdx.x;
     const int tid     = threadIdx.x;
     if (row >= rows)
@@ -398,8 +399,14 @@ static __global__ void quantize_attention(const half* src, int8_t* dst, float* s
             float v[8];
 #pragma unroll
             for (int j = 0; j < 8; ++j) {
-                const float value = __fmaf_rn(__half2float(src_row[group * group_size + j * 32 + lane]), input_scale, input_bias);
-                v[j]              = value * (1.0f / 16.0f);
+                const int64_t col = group * group_size + j * 32 + lane;
+                float value       = __half2float(src_row[col]);
+                if constexpr (Gated) {
+                    value = __fmul_rn(value, gates[row * (k >> head_shift) + (col >> head_shift)]);
+                } else {
+                    value = __fmaf_rn(value, input_scale, input_bias);
+                }
+                v[j] = value * (1.0f / 16.0f);
             }
             // One logical warp owns H256, keeping every butterfly in registers.
 #pragma unroll
@@ -569,23 +576,39 @@ static const ggml_tensor* graph_node(const ggml_cgraph* graph, int index) {
     return ggml_graph_node(const_cast<ggml_cgraph*>(graph), index);
 }
 
+static bool attention_output_view(const ggml_tensor* node, const ggml_tensor* attn) {
+    return node && (node->op == GGML_OP_VIEW || node->op == GGML_OP_RESHAPE) &&
+           node->view_offs == 0 && ggml_is_contiguous(node) && ggml_nelements(node) == ggml_nelements(attn);
+}
+
+static bool attention_output_gate(const ggml_tensor* node, const ggml_tensor* attn) {
+    const auto* input = node->src[0];
+    const auto* gate  = node->src[1];
+    return node->op == GGML_OP_MUL && input && gate && input->type == GGML_TYPE_F32 &&
+           (attn->ne[0] == 64 || attn->ne[0] == 128) && gate->type == GGML_TYPE_F32 && ggml_is_contiguous(gate) &&
+           ggml_are_same_shape(input, attn) && ggml_are_same_shape(node, input) && ggml_is_contiguous(node) &&
+           gate->ne[0] == 1 && gate->ne[1] == input->ne[1] && gate->ne[2] == input->ne[2] && gate->ne[3] == input->ne[3];
+}
+
 static int output_fusion(ggml_backend_dev_t device, const ggml_cgraph* graph, int first) {
     const auto* attn     = graph_node(graph, first);
     const auto* previous = attn;
     const int total      = ggml_graph_n_nodes(const_cast<ggml_cgraph*>(graph));
     bool scaled          = false;
+    bool gated           = false;
     for (int count = 1; count < 8 && first + count < total; ++count) {
         const auto* node = graph_node(graph, first + count);
         int convrot_group;
         if (node->src[0] != previous)
             break;
-        if (node->op == GGML_OP_VIEW || node->op == GGML_OP_RESHAPE) {
-            if (node->view_offs || !ggml_is_contiguous(node) || ggml_nelements(node) != ggml_nelements(attn))
-                break;
-        } else if (node->op == GGML_OP_SCALE && !scaled) {
+        if (attention_output_view(node, attn)) {
+            // The shape-only nodes preserve the flattened row order.
+        } else if (node->op == GGML_OP_SCALE && !scaled && !gated) {
             if (!ggml_is_contiguous(node) || !ggml_are_same_shape(previous, node))
                 break;
             scaled = true;
+        } else if (!gated && !scaled && attention_output_gate(node, attn)) {
+            gated = true;
         } else if (sd_ggml_convrot_describe(node, &convrot_group)) {
             if (convrot_group == 256 && previous->ne[0] % 256 == 0 &&
                 size_t(previous->ne[0]) * sizeof(float) + 128 <= cuda_device(device)->properties.sharedMemPerBlockOptin)
@@ -603,6 +626,26 @@ static int output_fusion(ggml_backend_dev_t device, const ggml_cgraph* graph, in
     return 1;
 }
 
+static int attention_hidden_rope_offset(const ggml_cgraph* graph, int first) {
+    const int count = ggml_graph_n_nodes(const_cast<ggml_cgraph*>(graph));
+    if (first + 4 >= count)
+        return 0;
+    const auto* norm = graph_node(graph, first);
+    const auto* rope = graph_node(graph, first + 3);
+    if (!sd_cuda::hidden_rope_fusion_supports(norm, graph_node(graph, first + 1), graph_node(graph, first + 2), rope))
+        return 0;
+    const auto* query = rope;
+    for (int i = first + 4; i < count && i < first + 12; ++i) {
+        const auto* node = graph_node(graph, i);
+        if (node->op == GGML_OP_FLASH_ATTN_EXT && node->src[0] == query)
+            return sd_cuda::hidden_rope_head_major(query, norm, rope) ? i - first : 0;
+        if (!sd_cuda::hidden_rope_view_of(node, query))
+            break;
+        query = node;
+    }
+    return 0;
+}
+
 static int attention_match(ggml_backend_dev_t device, const ggml_cgraph* graph, int first, void*) {
     if (!fusion_enabled())
         return 0;
@@ -615,11 +658,14 @@ static int attention_match(ggml_backend_dev_t device, const ggml_cgraph* graph, 
             return 0;
         offset = 5;
     } else if (graph_node(graph, first)->op == GGML_OP_RMS_NORM) {
-        if (first + 3 >= ggml_graph_n_nodes(const_cast<ggml_cgraph*>(graph)) ||
-            !sd_cuda::rope_fusion_supports(graph_node(graph, first), graph_node(graph, first + 1), graph_node(graph, first + 2)) ||
-            graph_node(graph, first + 3)->src[0] != graph_node(graph, first + 2))
-            return 0;
-        offset = 3;
+        offset = attention_hidden_rope_offset(graph, first);
+        if (!offset) {
+            if (first + 3 >= ggml_graph_n_nodes(const_cast<ggml_cgraph*>(graph)) ||
+                !sd_cuda::rope_fusion_supports(graph_node(graph, first), graph_node(graph, first + 1), graph_node(graph, first + 2)) ||
+                graph_node(graph, first + 3)->src[0] != graph_node(graph, first + 2))
+                return 0;
+            offset = 3;
+        }
     }
     if (!attention_selected(device, graph_node(graph, first + offset)))
         return 0;
@@ -630,19 +676,54 @@ static int attention_match(ggml_backend_dev_t device, const ggml_cgraph* graph, 
 static void attention_optimize(ggml_backend_dev_t device, ggml_cgraph* graph, void*) {
     if (!fusion_enabled())
         return;
+    const int total = ggml_graph_n_nodes(graph);
+    for (int i = 1; i < total; ++i) {
+        const auto* mul = graph_node(graph, i);
+        if (mul->op != GGML_OP_MUL)
+            continue;
+        const auto* attn = mul->src[0];
+        while (attention_output_view(attn, mul)) {
+            attn = attn->src[0];
+        }
+        if (!attn || !attention_selected(device, attn) || !attention_output_gate(mul, attn))
+            continue;
+        for (int j = i - 1; j >= 0 && j >= i - 48; --j) {
+            if (graph_node(graph, j) != attn)
+                continue;
+            int end = j + 1;
+            while (end < i && attention_output_view(graph_node(graph, end), attn) &&
+                   graph_node(graph, end)->src[0] == graph_node(graph, end - 1)) {
+                ++end;
+            }
+            if (end < i && graph_node(graph, end - 1) == mul->src[0])
+                ggml_ext_graph_delay(graph, j, end - j, i);
+            break;
+        }
+    }
     for (int i = 3; i < ggml_graph_n_nodes(const_cast<ggml_cgraph*>(graph)); ++i) {
         const auto* attn = graph_node(graph, i);
         if (!attention_selected(device, attn))
             continue;
-        for (int j = i - 3; j >= 0 && j >= i - 32; --j) {
-            if (attn->src[0] == graph_node(graph, j + 2) &&
-                sd_cuda::rope_fusion_supports(graph_node(graph, j), graph_node(graph, j + 1), graph_node(graph, j + 2))) {
-                if (j >= 2 && sd_cuda_i8_rope_supports(device, graph_node(graph, j - 2), graph_node(graph, j - 1), graph_node(graph, j), graph_node(graph, j + 1), graph_node(graph, j + 2)) &&
-                    ggml_ext_graph_delay(graph, j - 2, 5, i))
-                    break;
-                ggml_ext_graph_delay(graph, j, 3, i);
-                break;
+        const auto* query = attn->src[0];
+        for (int j = i - 1; j >= 2 && j >= i - 48; --j) {
+            if (graph_node(graph, j) != query)
+                continue;
+            int rope = j;
+            while (rope > 3 && sd_cuda::hidden_rope_view_of(graph_node(graph, rope), graph_node(graph, rope - 1))) {
+                --rope;
             }
+            if (rope >= 3 && j - rope < 8 &&
+                sd_cuda::hidden_rope_fusion_supports(graph_node(graph, rope - 3), graph_node(graph, rope - 2),
+                                                     graph_node(graph, rope - 1), graph_node(graph, rope)) &&
+                sd_cuda::hidden_rope_head_major(query, graph_node(graph, rope - 3), graph_node(graph, rope))) {
+                ggml_ext_graph_delay(graph, rope - 3, j - rope + 4, i);
+            } else if (sd_cuda::rope_fusion_supports(graph_node(graph, j - 2), graph_node(graph, j - 1), query)) {
+                if (j >= 4 && sd_cuda_i8_rope_supports(device, graph_node(graph, j - 4), graph_node(graph, j - 3), graph_node(graph, j - 2), graph_node(graph, j - 1), query) &&
+                    ggml_ext_graph_delay(graph, j - 4, 5, i))
+                    break;
+                ggml_ext_graph_delay(graph, j - 2, 3, i);
+            }
+            break;
         }
     }
 }
@@ -664,10 +745,11 @@ static bool attention_direct_input(const ggml_tensor* src) {
 }
 
 static ggml_status attention_prepare(ggml_backend_t, ggml_tensor* const* nodes, int count, void** state, size_t* workspace_size, void*) {
-    auto* plan  = new AttentionPlan{};
-    *state      = plan;
-    plan->index = ggml_ext_op_get(nodes[0]) == sd_ggml_i8_op() ? 5 : nodes[0]->op == GGML_OP_RMS_NORM ? 3
-                                                                                                      : 0;
+    auto* plan = new AttentionPlan{};
+    *state     = plan;
+    while (plan->index < count && nodes[plan->index]->op != GGML_OP_FLASH_ATTN_EXT) {
+        ++plan->index;
+    }
     GGML_ASSERT(plan->index < count);
     const auto* attn    = nodes[plan->index];
     const auto* dst     = nodes[count - 1];
@@ -729,7 +811,10 @@ static ggml_status attention_execute(const ggml_ext_execution_context* execution
     for (int i = 0; i < 3; ++i) {
         const auto* src   = attn->src[i];
         const float scale = i == 0 ? param_f32(attn, 0) : 1.0f;
-        if (i == 0 && plan.index == 5) {
+        if (i == 0 && plan.index >= 4 && nodes[0]->op == GGML_OP_RMS_NORM) {
+            if (sd_cuda::hidden_rope_launch(stream, nodes, work[0], true, scale) != cudaSuccess)
+                return GGML_STATUS_FAILED;
+        } else if (i == 0 && plan.index == 5) {
             if (sd_cuda_i8_rope_launch(stream, nodes, work[0], scale) != cudaSuccess)
                 return GGML_STATUS_FAILED;
         } else if (i == 0 && plan.index == 3) {
@@ -751,10 +836,13 @@ static ggml_status attention_execute(const ggml_ext_execution_context* execution
     const auto* k = attn->src[1];
     auto* dst     = nodes[count - 1];
     float scale = 1.0f, bias = 0.0f;
+    const float* gates = nullptr;
     for (int i = plan.index + 1; i < count; ++i) {
         if (nodes[i]->op == GGML_OP_SCALE) {
             scale = param_f32(nodes[i], 0);
             bias  = param_f32(nodes[i], 1);
+        } else if (nodes[i]->op == GGML_OP_MUL) {
+            gates = static_cast<const float*>(nodes[i]->src[1]->data);
         }
     }
     sd_fattn_cute::Params p = {reinterpret_cast<const cutlass::half_t*>(inputs[0]),
@@ -781,7 +869,7 @@ static ggml_status attention_execute(const ggml_ext_execution_context* execution
             error = attention_launch<112, true>(context, p, q->ne[3]);
             break;
         case 128:
-            error = p.dim == 128 && p.nq >= 4096 && p.nq < 8192 && p.nk >= 4096 && p.nk < 8192 &&
+            error = p.dim == 128 && p.nq >= 4096 && p.nk >= 4096 &&
                             properties.major == 8 && properties.minor == 9
                         ? attention_launch<128, true, true>(context, p, q->ne[3])
                         : attention_launch<128>(context, p, q->ne[3]);
@@ -803,11 +891,13 @@ static ggml_status attention_execute(const ggml_ext_execution_context* execution
         auto* packed = static_cast<int8_t*>(dst->data);
         if (rows != padded_rows && cudaMemsetAsync(packed + width * rows, 0, width * (padded_rows - rows), stream) != cudaSuccess)
             return GGML_STATUS_FAILED;
-        if (cudaFuncSetAttribute(quantize_attention, cudaFuncAttributeMaxDynamicSharedMemorySize,
+        auto quantize = gates ? quantize_attention<true> : quantize_attention<false>;
+        if (cudaFuncSetAttribute(quantize, cudaFuncAttributeMaxDynamicSharedMemorySize,
                                  int(properties.sharedMemPerBlockOptin - 128)) != cudaSuccess)
             return GGML_STATUS_FAILED;
-        quantize_attention<<<rows, 256, width * sizeof(float), stream>>>(work[3], packed,
-                                                                         reinterpret_cast<float*>(packed + width * padded_rows), width, rows, scale, bias);
+        quantize<<<rows, 256, width * sizeof(float), stream>>>(work[3], packed,
+                                                               reinterpret_cast<float*>(packed + width * padded_rows), width, rows, scale, bias,
+                                                               gates, q->ne[0] == 128 ? 7 : 6);
     } else {
         copy_from_half<<<(ggml_nelements(attn) + 255) / 256, 256, 0, stream>>>(work[3], static_cast<float*>(dst->data), ggml_nelements(attn), scale, bias, dst->op == GGML_OP_SCALE);
     }

@@ -3,6 +3,7 @@
 
 #include <array>
 #include <unordered_map>
+#include <vector>
 #include "ggml.h"
 
 struct ggml_backend_buffer;
@@ -40,12 +41,15 @@ namespace sd {
         ggml_cgraph* graph_ = nullptr;
         std::unordered_map<ggml_tensor*, ExternalBinding> external_bindings_;
         struct Topology {
+            ggml_tensor* tensor;
             ggml_op op;
             std::array<ggml_tensor*, GGML_MAX_SRC> sources;
             ggml_tensor* view_source;
             int flags;
         };
-        std::unordered_map<ggml_tensor*, Topology> topology_;
+        std::vector<Topology> topology_;
+
+        void remember(ggml_tensor* tensor);
     };
 }
 
