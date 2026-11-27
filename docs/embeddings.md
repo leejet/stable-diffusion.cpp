@@ -9,85 +9,100 @@ Supported weight files are `.safetensors`, `.pt`, `.ckpt` and `.gguf`.
 
 ## Directory layout
 
-Point `--embd-dir` at the folder holding the embedding files. Subdirectories
-are scanned recursively:
+Point `--embd-dir` at the folder holding the embedding files. Only the top
+level of the directory is scanned; subdirectory files are not discovered:
 
 ```sh
 ./bin/sd-cli -m ../models/v1-5-pruned-emaonly.safetensors \
   --embd-dir ../models/embeddings \
-  -p "ehartnoveau, girl playing the guitar" \
+  -p "easynegative, girl playing the guitar" \
   --steps 20 -o output.png
 ```
 
 The trigger word defaults to the file name without its extension. For
-`embeddings/ehartnoveau.safetensors` the trigger word is `ehartnoveau`.
-File names are matched case-insensitively, and a relative path without its
-extension (for example `style/ehartnoveau` for
-`embeddings/style/ehartnoveau.safetensors`) also works as a trigger word.
-
-When two files share the same stem, the first file found keeps the bare stem
-and every file keeps its own relative path. Prefer unique stems or use the
-relative path form to disambiguate.
+`embeddings/easynegative.safetensors` the trigger word is `easynegative`.
 
 Run with `-v` to list the discovered embeddings at startup:
 
 ```text
 embedding_dir: "/path/to/embeddings",
 embeddings: {
-  "ehartnoveau": "/path/to/embeddings/ehartnoveau.safetensors",
+  "easynegative": "/path/to/embeddings/easynegative.safetensors",
   ...
 }
 ```
 
+The same `--embd-dir` startup option applies to `sd-server`; prompts sent to
+the server resolve the same way.
+
 ## Using embeddings in prompts
 
-### 1. Bare trigger word
+The CLI and the server both accept the two forms below in `prompt` and
+`negative_prompt`. Prompt weights, token chunks and SDXL dual-CLIP
+zero-padding still apply.
+
+### 1. Bare trigger word via `--embd-dir`
 
 Type the trigger word like any other word:
 
 ```text
-ehartnoveau, girl playing the guitar
+easynegative, girl playing the guitar
 ```
 
-Normal prompt weighting applies, so `(ehartnoveau:1.2)` boosts it and
-`[ehartnoveau]` weakens it.
+Before generation the prompt is scanned for `--embd-dir` file stems.
+Matching is case-insensitive, longest-stem-first and word-boundary aware, and
+existing `<...>` tags are left untouched. A match is rewritten to an explicit
+`<embedding:...>` tag with the stored file path, so the vectors replace token
+embeddings before CLIP adds positional embeddings.
+
+Normal prompt weighting applies, so `(easynegative:1.2)` boosts it and
+`[easynegative]` weakens it.
 
 ### 2. Explicit `<embedding:...>` tag
 
-When the file name is hard to type, contains spaces, or lives in a subdirectory,
-reference it explicitly. This mirrors the `<lora:...>` syntax:
+Reference a file directly by path:
 
 ```text
-a lovely cat, <embedding:ehartnoveau:0.8>
-a lovely cat, <embedding:style/ehartnoveau:0.8>
-a lovely cat, <emb:my embedding>
+a lovely cat, <embedding:embeddings/badhandV4.pt>
 ```
 
 Rules:
 
-- The tag prefix is `embedding` or the short alias `emb`, case-insensitive:
-  `<embedding:...>`, `<Embedding:...>`, `<emb:...>` all work.
-- The name may be a file stem (`my_emb`), a relative path with forward or
-  backward slashes (`sub/dir/my_emb`), and may include the file extension
-  (`my_emb.safetensors`), which is ignored for the lookup.
-- The weight is optional. `<embedding:my_emb>` means weight `1.0`.
-  With a weight, the tag expands to `(trigger:weight)` before the usual
-  `(text:weight)` parser runs, for example
-  `<embedding:ehartnoveau:0.8>` becomes `(ehartnoveau:0.8)`.
-- An unknown name logs a warning and falls back to the stripped name as plain
-  text, so a typo does not leak `<embedding:...>` tokens into the tokenizer.
-- If the file stem collides with an ordinary word (for example an embedding
-  named `cat`), rename the file to a unique stem instead of using a tag: the
-  tag expands to the same trigger word, so a bare `cat` elsewhere in the
-  prompt would still activate the embedding.
+- The content is a file path, not a trigger word. Paths resolve from the
+  process working directory and are canonicalized before loading. The server
+  also requires the path to pass its model-directory allowlist.
+- `<embedding:...>` follows the same path and escaping rules as
+  `<image:...>`. Use `\<embedding:...>` for literal text. A bare filename
+  without `--embd-dir` is ordinary text in DGL `encode_prompt`; use the tag.
+- The tag requires an SD 1.x, SD 2.x or SDXL CLIP encoder. Other encoders
+  reject it, and a missing file fails generation.
+- A path may not contain `>`.
+- Replacing the file invalidates the cached condition without rebuilding the
+  text encoder.
+
+Weight follows the normal attention syntax around the tag:
+
+```text
+a lovely cat, (<embedding:embeddings/badhandV4.pt>:0.8)
+```
+
+### DGL
+
+```dgl
+text = load_text_encoder(model_path)
+negative = encode_prompt(text, "<embedding:embeddings/badhandV4.pt>, blurry")
+```
+
+No tokenizer aliases or loader `embeddings` argument are used.
 
 ## Troubleshooting
 
-- `embedding '...' not found`: the file is not under `--embd-dir`, has an
-  unsupported extension, or the name was mistyped. Check the verbose startup
-  listing for the exact key.
+- `cannot inspect textual inversion '...'`: the path is wrong, the file is
+  unreadable, or file access (`SD_DGL_FILE_READ_MODEL` and the server
+  allowlist) rejected it.
 - No visible effect: make sure the checkpoint is SD 1.x, SD 2.x or SDXL.
-  Other models ignore textual inversion files.
-- Weight has no effect and the log mentions `contains attention syntax`:
-  the trigger word itself contains `()[]:\`. Rename the file to a plain
-  stem and use the tag form.
+  Other models reject embedding markers.
+- Bare word does nothing: the file is not directly under `--embd-dir`, has an
+  unsupported extension, collided with another stem, or was split by prompt
+  weighting punctuation. Check the verbose startup listing for the exact key,
+  and prefer unique stems.

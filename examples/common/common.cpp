@@ -794,65 +794,12 @@ void SDContextParams::build_embedding_map() {
         return;
     }
 
-    auto to_lower = [](std::string s) {
-        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
-            return static_cast<char>(std::tolower(c));
-        });
-        return s;
-    };
-    // Keys are matched case-insensitively downstream, so keep the first file
-    // when two names only differ by case or share the same file stem.
-    std::map<std::string, std::string> lower_seen;
-    for (const auto& kv : embedding_map) {
-        std::string lower = to_lower(kv.first);
-        std::replace(lower.begin(), lower.end(), '\\', '/');
-        lower_seen.emplace(lower, kv.first);
-    }
-    auto try_insert = [&](const std::string& key, const std::string& value) {
-        if (key.empty()) {
-            return;
-        }
-        std::string lower = to_lower(key);
-        std::replace(lower.begin(), lower.end(), '\\', '/');
-        if (lower_seen.find(lower) != lower_seen.end()) {
-            return;
-        }
-        if (embedding_map.find(key) != embedding_map.end()) {
-            lower_seen[lower] = key;
-            return;
-        }
-        embedding_map[key] = value;
-        lower_seen[lower]  = key;
-    };
-
-    // Collect first so relative-path keys can be registered before stem keys.
-    // This keeps a root-level file reachable when a nested file shares its
-    // stem: the root file owns the bare stem while the nested file stays
-    // reachable via its relative path.
-    std::vector<std::pair<std::string, std::string>> rel_entries;
-    std::vector<std::pair<std::string, std::string>> stem_entries;
-    std::error_code ec;
-    fs::recursive_directory_iterator end;
-    // skip_permission_denied keeps readable siblings discoverable when a
-    // subdirectory is inaccessible; other traversal errors are reported below.
-    fs::recursive_directory_iterator it(embedding_dir_path, fs::directory_options::skip_permission_denied, ec);
-    if (ec) {
-        LOG_WARN("failed to scan embedding dir '%s': %s", embedding_dir.c_str(), ec.message().c_str());
-        return;
-    }
-    for (; it != end; it.increment(ec)) {
-        if (ec) {
-            LOG_WARN("error scanning embedding dir '%s': %s", embedding_dir.c_str(), ec.message().c_str());
-            break;
-        }
-        const auto& p = *it;
-        std::error_code file_ec;
-        if (!p.is_regular_file(file_ec) || file_ec) {
+    for (auto& p : fs::directory_iterator(embedding_dir_path)) {
+        if (!p.is_regular_file())
             continue;
-        }
 
         auto path       = p.path();
-        std::string ext = to_lower(path.extension().u8string());
+        std::string ext = path.extension().u8string();
 
         bool valid = false;
         for (auto& e : valid_ext) {
@@ -864,24 +811,10 @@ void SDContextParams::build_embedding_map() {
         if (!valid)
             continue;
 
-        std::string value    = path.u8string();
-        std::string stem_key = path.stem().u8string();
-        std::string rel_key;
-        // Lexical only: never resolve symlinks, so the documented
-        // relative path stays selectable even for symlinked files.
-        fs::path rel = path.lexically_relative(embedding_dir_path);
-        if (!rel.empty()) {
-            rel.replace_extension();
-            rel_key = rel.generic_u8string();
-        }
-        rel_entries.emplace_back(rel_key, value);
-        stem_entries.emplace_back(stem_key, value);
-    }
-    for (const auto& entry : rel_entries) {
-        try_insert(entry.first, entry.second);
-    }
-    for (const auto& entry : stem_entries) {
-        try_insert(entry.first, entry.second);
+        std::string key   = path.stem().u8string();
+        std::string value = path.u8string();
+
+        embedding_map[key] = value;
     }
 }
 
