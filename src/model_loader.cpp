@@ -568,6 +568,11 @@ SDVersion ModelLoader::get_sd_version() const {
             if (tensor_storage_map.find("model.diffusion_model.local_decoder.out_conv.weight") != tensor_storage_map.end()) {
                 return VERSION_Z_IMAGE_L2P;
             }
+            if (tensor_storage_map.find("model.diffusion_model.x_pad_token") == tensor_storage_map.end()) {
+                // The pad tokens are part of the Z-Image architecture and always present in its
+                // checkpoints; Ming-Image shares the Lumina2 shape without them.
+                return VERSION_MING_IMAGE;
+            }
             return VERSION_Z_IMAGE;
         }
         if (tensor_storage.name.find("double_stream_layers.0.img_instruct_attn.processor.img_to_q.weight") != std::string::npos) {
