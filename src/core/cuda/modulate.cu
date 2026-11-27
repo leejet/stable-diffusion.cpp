@@ -99,7 +99,8 @@ namespace SD_CUDA_NAMESPACE {
         }
 
         static bool rms_modulate_supports(const ggml_tensor* norm, const ggml_tensor* mod) {
-            if (norm->op != GGML_OP_RMS_NORM || !sd_ggml_modulate_describe(mod) || mod->src[0] != norm)
+            if (norm->op != GGML_OP_RMS_NORM || !sd_ggml_modulate_describe(mod) || mod->src[0] != norm ||
+                mod->src[1] == norm || mod->src[2] == norm)
                 return false;
             const auto* input     = norm->src[0];
             const auto width      = input->ne[0];

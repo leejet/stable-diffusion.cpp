@@ -227,7 +227,7 @@ namespace SD_CUDA_NAMESPACE {
         const auto* x      = norm->src[0];
         const auto* weight = mul->src[1];
         const auto* pe     = rope->src[1];
-        return x && weight && x->type == GGML_TYPE_F32 && norm->type == GGML_TYPE_F32 &&
+        return x && weight && weight != norm && x->type == GGML_TYPE_F32 && norm->type == GGML_TYPE_F32 &&
                weight->type == GGML_TYPE_F32 && ggml_nelements(weight) == x->ne[0] && weight->ne[0] == x->ne[0] &&
                (x->ne[0] == 2048 || x->ne[0] == 4096) && ggml_nrows(x) <= INT_MAX &&
                ggml_are_same_shape(x, norm) && ggml_are_same_shape(x, mul) &&
