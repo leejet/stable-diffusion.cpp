@@ -180,6 +180,7 @@ struct SDContextParams {
     std::optional<std::string> flash_attn_mode;
     std::optional<std::string> conv_direct_mode;
     std::optional<bool> sage_attn;
+    std::optional<std::string> linear_type;
     std::optional<bool> diffusion_conv_direct;
     std::optional<bool> vae_conv_direct;
     std::optional<bool> taesd_preview_only;

@@ -3,6 +3,7 @@
 #include <climits>
 #include <limits>
 
+#include "core/ggml_extend_backend.h"
 #include "core/util.h"
 #include "dgl/bindings/audio.h"
 #include "dgl/bindings/component_loader.h"
@@ -342,8 +343,16 @@ namespace sd::dgl {
             execute_save_audio);
     }
 
+    static Operation model_loader(SDBackendModule module, std::vector<Argument> args, OutputSignature output, std::function<PreparedResource(Values&)> prepare) {
+        args.push_back(choice("linear_type", {"auto", "i8", "raw"}, "auto"));
+        auto operation           = make_resource_operation(std::move(args), std::move(output), std::move(prepare));
+        operation.backend_module = module;
+        return operation;
+    }
+
     static void register_model_operations(Registry& registry) {
-        registry["load_upscaler"] = make_resource_operation(
+        registry["load_upscaler"] = model_loader(
+            SDBackendModule::UPSCALER,
             {
                 model_path("path"),
                 integer("tile_size", 0, 16384, 128),
@@ -363,7 +372,8 @@ namespace sd::dgl {
             },
             {Kind::Tensor},
             execute_upscale);
-        registry["load_detector"] = make_resource_operation(
+        registry["load_detector"] = model_loader(
+            SDBackendModule::DETECTOR,
             {
                 model_path("path"),
                 backend_option("backend"),
@@ -374,7 +384,7 @@ namespace sd::dgl {
     }
 
     template <class T, class Load>
-    static Operation component_loader(const Argument& family, Load load, std::vector<Argument> options = {}, bool require_path = true) {
+    static Operation component_loader(SDBackendModule module, const Argument& family, Load load, std::vector<Argument> options = {}, bool require_path = true) {
         std::vector<Argument> args{
             model_path("path", require_path),
             family,
@@ -392,7 +402,7 @@ namespace sd::dgl {
         args.push_back(optional("sage_attn", Kind::Boolean, false));
         for (auto& option : options)
             args.push_back(std::move(option));
-        return make_resource_operation(std::move(args), {ObjectKind<T>::value}, load);
+        return model_loader(module, std::move(args), {ObjectKind<T>::value}, load);
     }
 
     static void register_lora_operations(Registry& registry) {
@@ -414,11 +424,12 @@ namespace sd::dgl {
         const auto family_from = model_path("family_from", false);
         register_lora_operations(registry);
 
-        registry["load_dit"] = component_loader<models::DiffusionModel>(family, load_dit);
+        registry["load_dit"] = component_loader<models::DiffusionModel>(SDBackendModule::DIFFUSION, family, load_dit);
         registry.alias("load_unet", "load_dit");
 
         auto tokenizer                = optional("tokenizer", Kind::String, "");
         registry["load_text_encoder"] = component_loader<models::TextEncoder>(
+            SDBackendModule::TE,
             family,
             load_text_encoder,
             {
@@ -432,6 +443,7 @@ namespace sd::dgl {
                 model_path("clip_g_path", false),
             });
         registry["load_vae"] = component_loader<models::VAE>(
+            SDBackendModule::VAE,
             family,
             load_vae,
             {
@@ -439,17 +451,17 @@ namespace sd::dgl {
                 choice("vae_format", {"auto", "flux", "sd3", "flux2", "wan"}, "auto"),
             });
         registry["load_tae"] = component_loader<models::VAE>(
-            family, load_tae, {family_from, optional("decode_only", Kind::Boolean, false)});
-        registry["controlnet::load"]     = component_loader<models::ControlNet>(family, load_controlnet);
-        registry["load_vision_encoder"]  = component_loader<models::VisionEncoder>(family, load_vision_encoder);
-        registry["load_audio_encoder"]   = component_loader<models::AudioEncoder>(family, load_audio_encoder);
-        registry["load_audio_vae"]       = component_loader<models::AudioVAE>(family, load_audio_vae, {family_from});
-        registry["ip_adapter::load"]     = component_loader<models::IPAdapter>(family, load_ip_adapter);
-        registry["photomaker::load"]     = component_loader<models::PhotoMaker>(family, load_photomaker);
-        registry["pulid::load"]          = component_loader<models::PuLID>(family, load_pulid);
-        registry["animatediff::load"]    = component_loader<models::AnimateDiff>(family, load_animatediff);
+            SDBackendModule::VAE, family, load_tae, {family_from, optional("decode_only", Kind::Boolean, false)});
+        registry["controlnet::load"]     = component_loader<models::ControlNet>(SDBackendModule::CONTROL_NET, family, load_controlnet);
+        registry["load_vision_encoder"]  = component_loader<models::VisionEncoder>(SDBackendModule::CLIP_VISION, family, load_vision_encoder);
+        registry["load_audio_encoder"]   = component_loader<models::AudioEncoder>(SDBackendModule::AUDIO_ENCODER, family, load_audio_encoder);
+        registry["load_audio_vae"]       = component_loader<models::AudioVAE>(SDBackendModule::VAE, family, load_audio_vae, {family_from});
+        registry["ip_adapter::load"]     = component_loader<models::IPAdapter>(SDBackendModule::DIFFUSION, family, load_ip_adapter);
+        registry["photomaker::load"]     = component_loader<models::PhotoMaker>(SDBackendModule::PHOTOMAKER, family, load_photomaker);
+        registry["pulid::load"]          = component_loader<models::PuLID>(SDBackendModule::DIFFUSION, family, load_pulid);
+        registry["animatediff::load"]    = component_loader<models::AnimateDiff>(SDBackendModule::DIFFUSION, family, load_animatediff);
         registry["load_latent_upscaler"] = component_loader<models::LatentUpscaler>(
-            choice("family", {"auto", "ltxav", "minimax_h3"}, "auto"), load_latent_upscaler);
+            SDBackendModule::DIFFUSION, choice("family", {"auto", "ltxav", "minimax_h3"}, "auto"), load_latent_upscaler);
         registry["pulid::load_embedding"] = make_operation(
             {required("path", Kind::String)}, {Kind::Tensor}, execute_load_pulid_embedding);
         registry["photomaker::encode_images"] = make_operation(

@@ -1735,8 +1735,9 @@ sd_dgl_result_free(result);
 ### Context execution settings
 
 Set these options with `sd_dgl_ctx_set` while the context is idle or use the
-corresponding `sd-cli` and `sd-server` flags. All models in the context use the
-same settings.
+corresponding `sd-cli` and `sd-server` flags. The settings apply throughout the
+context. A `linear_type` context setting overrides the loader's `linear_type`
+argument for each selected module.
 
 | Context key | CLI and server flag | Default |
 | --- | --- | --- |
@@ -1748,6 +1749,7 @@ same settings.
 | `eager_load` | `--eager-load` | Off |
 | `disable_prefetch` | `--disable-prefetch` | Off |
 | `disable_segmented_compute` | `--disable-segmented-compute` | Off |
+| `linear_type` | `--linear-type` with `auto\|i8\|raw` or module assignments such as `dit=i8` | `auto` (currently equivalent to `raw`) |
 
 The context accepts a thread count from 1 to 4096 and boolean strings such as
 `"on"` and `"off"`. Changing threading, placement or weight-loading options

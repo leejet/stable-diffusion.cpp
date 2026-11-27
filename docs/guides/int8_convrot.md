@@ -100,7 +100,7 @@ The packed runtime activation tensor contains the I8 activation rows and their f
 - Metal supports INT8 tensorwise and convrot on Apple silicon (Apple GPU family 7 or newer). It keeps weights in INT8 and rotates and quantizes activations on the GPU. On macOS/iOS 26 or newer, it probes Metal TensorOps `matmul2d` with INT8 inputs and INT32 cooperative results. It combines 1024-product partial sums using wrapping integer addition to preserve exact accumulation on older GPUs, then applies scales and bias in registers. Older systems or unavailable TensorOps pipelines use SIMD-group matrix multiplication: INT8 tiles are converted to FP16, and FP32 partial sums cover at most 256 products before being combined as integers, preserving the I32 accumulation contract. Convrot groups 1, 4, 16, 64, and 256 are supported. These kernels require the patched GGML Metal extension services and are enabled by `SD_METAL=ON`.
 - CUDA uses CUTLASS for eligible shapes when enabled, and cuBLAS for other eligible shapes on Turing and newer. HIP uses hipBLAS or hipBLASLt on supported targets, including RDNA2, RDNA3, RDNA3.5, RDNA4 (`gfx120x`), and CDNA.
 - CUDA, HIP, and MUSA share a tiled INT8 dot-product fallback. It handles devices without INT8 BLAS and projections whose output width is not divisible by four. It uses packed byte-dot instructions where available.
-- Vulkan supports H64 and H256 activation quantization and packed-activation INT8 matrix multiplication with input widths divisible by 64. It requires integer dot product support and uses cooperative matrices when available. Unsupported configurations use the scheduler's CPU fallback.
+- Vulkan supports unrotated rowwise, H64, and H256 activation quantization and packed-activation INT8 matrix multiplication with input widths divisible by 64. It requires integer dot product support and uses cooperative matrices when available. Unsupported configurations use the scheduler's CPU fallback.
 
 `--lora-apply-mode auto` selects immediate merging for INT8 tensorwise models
 on the compute backend without row splitting. Use `--lora-apply-mode at_runtime`
@@ -163,6 +163,38 @@ LoRA application remains at runtime, using the original unrotated activations
 and logical weight dimensions. Packed weights and their codebook/scale tensors
 are excluded from weight type conversion. `SD_USE_UPSTREAM_GGML` builds reject
 these formats because they require the application extension API.
+
+## Runtime requantization to INT8
+
+Use `--linear-type i8` to run eligible Q8_0 linear layers through INT8 GEMM on
+CUDA, HIP, MUSA, and Vulkan. A bare mode applies to all models in the context,
+including diffusion models and text encoders loaded with `--llm`. The default
+is `auto`, which currently behaves like `raw`. With `--linear-type raw`, each
+layer uses its original execution path. Native INT8 weights use their INT8
+path in all three modes.
+
+Use module assignments to apply a mode selectively. For example,
+`--linear-type dit=i8` selects runtime conversion for the diffusion module.
+The text encoder and other modules use `auto`. Use `--linear-type i8,te=raw` to
+enable conversion globally while keeping the text encoders on their original
+paths. Module names and aliases are shared with [backend selection](backend.md).
+Module assignments override the default regardless of their order. Within
+the same string, the last value for a module or the default wins.
+
+Vulkan requires integer dot products, a projection input width divisible by
+64, and supported storage buffer sizes and alignment. The C API option is
+`linear_type`. In DGL, set the mode on a model loader, for example
+`load_dit(path, linear_type = "i8")`. To override loader settings by module,
+use `sd_dgl_ctx_set(ctx, "linear_type", "dit=i8")` or pass
+`--linear-type dit=i8` when running the script from the CLI.
+
+At runtime, sd.cpp requantizes the Q8_0 weights to INT8 with one scale per
+output channel and quantizes activations with one scale per input row. The
+converted matrix uses temporary GPU memory and feeds the standard INT8 kernels
+and their fusions. The checkpoint file stays in its original format.
+Requantization changes numerical results, and conversion overhead depends on
+matrix shape. Row-split models and unsupported layers use the standard Q8_0
+path.
 
 ## Example
 

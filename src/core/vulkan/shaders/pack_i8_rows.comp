@@ -1,0 +1,139 @@
+#version 450
+
+#ifdef SUBGROUP_MAX
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#endif
+#ifdef Q8_HALFWORDS
+#extension GL_EXT_shader_16bit_storage : require
+#endif
+
+layout(local_size_x = 128) in;
+
+layout(push_constant) uniform Parameters {
+    uint words_per_row;
+    uint rows;
+    uint scale_offset;
+}
+p;
+
+#ifdef Q8_0
+layout(binding = 0, std430) readonly buffer Source {
+#ifdef Q8_HALFWORDS
+    uint16_t source_halfwords[];
+#else
+    uint source_words[];
+#endif
+};
+#else
+layout(binding = 0, std430) readonly buffer Source {
+    vec4 source_values[];
+};
+#endif
+
+layout(binding = 1, std430) writeonly buffer Output {
+    uint packed[];
+};
+
+#ifdef SUBGROUP_MAX
+shared float maxima[gl_WorkGroupSize.x / 32];
+#else
+shared float maxima[gl_WorkGroupSize.x];
+#endif
+
+#ifdef Q8_0
+ivec4 load_q8(const uint row, const uint word, out float scale) {
+    // Each GGML block stores a half scale followed by 32 signed bytes.
+    const uint block = row * (p.words_per_row / 8) + word / 8;
+#ifdef Q8_HALFWORDS
+    const uint halfword   = block * 17;
+    const uint value_halfword = halfword + 1 + (word % 8) * 2;
+    const uint scale_bits = uint(source_halfwords[halfword]);
+    const uint values = uint(source_halfwords[value_halfword]) | (uint(source_halfwords[value_halfword + 1]) << 16);
+#else
+    const uint block_byte = block * 34;
+    const uint scale_bits = source_words[block_byte / 4] >> ((block_byte & 2) * 8);
+    const uint value_byte = block_byte + 2 + (word % 8) * 4;
+    uint values           = source_words[value_byte / 4];
+    if ((value_byte & 2) != 0) {
+        values = (values >> 16) | (source_words[value_byte / 4 + 1] << 16);
+    }
+#endif
+    scale = unpackHalf2x16(scale_bits).x;
+    const int bytes = int(values);
+    return ivec4(bitfieldExtract(bytes, 0, 8), bitfieldExtract(bytes, 8, 8),
+                 bitfieldExtract(bytes, 16, 8), bitfieldExtract(bytes, 24, 8));
+}
+#endif
+
+vec4 load_values(const uint row, const uint word) {
+#ifdef Q8_0
+    float scale;
+    const ivec4 values = load_q8(row, word, scale);
+    return scale * vec4(values);
+#else
+    return source_values[row * p.words_per_row + word];
+#endif
+}
+
+void pack_row(const uint row) {
+    const uint tid = gl_LocalInvocationID.x;
+    float maximum  = 0.0;
+    for (uint word = tid; word < p.words_per_row; word += gl_WorkGroupSize.x) {
+#ifdef Q8_0
+        float scale;
+        const ivec4 values = abs(load_q8(row, word, scale));
+        const int magnitude = max(max(values.x, values.y), max(values.z, values.w));
+        maximum = max(maximum, float(magnitude) * abs(scale));
+#else
+        const vec4 values = abs(load_values(row, word));
+        maximum           = max(maximum, max(max(values.x, values.y), max(values.z, values.w)));
+#endif
+    }
+#ifdef SUBGROUP_MAX
+    maximum = subgroupMax(maximum);
+    if (subgroupElect()) {
+        maxima[gl_SubgroupID] = maximum;
+    }
+    barrier();
+    if (tid == 0) {
+        for (uint i = 1; i < gl_WorkGroupSize.x / 32; ++i) {
+            maximum = max(maximum, maxima[i]);
+        }
+        maxima[0] = maximum;
+    }
+    barrier();
+#else
+    maxima[tid] = maximum;
+    barrier();
+    for (uint stride = gl_WorkGroupSize.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            maxima[tid] = max(maxima[tid], maxima[tid + stride]);
+        }
+        barrier();
+    }
+#endif
+
+    const float scale = maxima[0] / 127.0;
+    if (tid == 0) {
+        packed[p.scale_offset + row] = floatBitsToUint(scale);
+    }
+#ifdef Q8_0
+    const float inverse = maxima[0] == 0.0 ? 0.0 : 127.0 / maxima[0];
+#else
+    const float inverse = scale == 0.0 ? 0.0 : 1.0 / scale;
+#endif
+
+    for (uint word = tid; word < p.words_per_row; word += gl_WorkGroupSize.x) {
+        const ivec4 quantized = ivec4(roundEven(clamp(load_values(row, word) * inverse, -127.0, 127.0)));
+        const uvec4 bytes    = uvec4(quantized) & 255u;
+        packed[row * p.words_per_row + word] = bytes.x | (bytes.y << 8) | (bytes.z << 16) | (bytes.w << 24);
+    }
+    barrier();
+}
+
+void main() {
+    for (uint row = gl_WorkGroupID.x; row < p.rows; row += gl_NumWorkGroups.x) {
+        pack_row(row);
+    }
+}

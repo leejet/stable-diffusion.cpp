@@ -19,6 +19,7 @@ namespace sd::dgl::models {
         std::string params_backend;
         bool direct;
         int tile_size;
+        bool linear_i8 = false;
     };
 
     struct ImageUpscaler final : public Model {

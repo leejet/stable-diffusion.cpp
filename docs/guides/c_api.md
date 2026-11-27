@@ -427,6 +427,7 @@ For SDXL's bundled VAE (no `vae_path`), generation emits
 | `image` | `tensor` | upscale |
 | `init_image` | `tensor` | image, video |
 | `linear_scale` | `float` | context |
+| `linear_type` | `string` | context, upscaler. `auto` (default), `i8`, `raw`, or module assignments such as `dit=i8,te=raw` |
 | `llm_path` | `string` | context |
 | `llm_vision_path` | `string` | context |
 | `lora_apply_mode` | `string` | context |

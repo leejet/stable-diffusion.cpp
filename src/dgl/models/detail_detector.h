@@ -34,6 +34,7 @@ namespace sd::dgl::models {
         std::string path;
         std::string backend;
         std::string params_backend;
+        bool linear_i8 = false;
     };
 
     struct DetailDetector final : public Model {

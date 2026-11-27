@@ -823,7 +823,8 @@ int main(int argc, const char* argv[]) {
                                                        ctx_params.n_threads,
                                                        gen_params.upscale_tile_size,
                                                        ctx_params.effective_backend.c_str(),
-                                                       ctx_params.effective_params_backend.c_str()));
+                                                       ctx_params.effective_params_backend.c_str(),
+                                                       ctx_params.linear_type));
 
         if (upscaler_ctx == nullptr) {
             LOG_ERROR("sd_upscaler_create failed");

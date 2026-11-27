@@ -48,6 +48,7 @@ struct SDI8Operation {
 bool sd_ggml_valid_convrot_group(int group);
 
 ggml_ext_op_t sd_ggml_i8_op();
+ggml_ext_op_t sd_ggml_requantize_q8_op();
 
 ggml_ext_op_t sd_ggml_convrot_op();
 

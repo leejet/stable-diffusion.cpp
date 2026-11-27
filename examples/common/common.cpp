@@ -687,6 +687,22 @@ ArgOptions SDContextParams::get_options() {
              return 0;
          }},
         {"",
+         "--linear-type",
+         "auto|i8|raw or module assignments, e.g. dit=i8 or i8,te=raw. Default: auto (currently equivalent to raw)",
+         [this](int argc, const char** argv, int index) {
+             if (++index >= argc || argv[index][0] == '\0') {
+                 LOG_ERROR("--linear-type requires auto, i8, raw, or module assignments");
+                 return -1;
+             }
+             SDOptPtr validation(sd_ctx_opt_create());
+             if (sd_opt_set_string(validation.get(), "linear_type", argv[index]) != SD_STATUS_OK) {
+                 LOG_ERROR("--linear-type: %s", sd_get_last_error());
+                 return -1;
+             }
+             linear_type = argv[index];
+             return 1;
+         }},
+        {"",
          "--conv-direct",
          "on|off|auto or diffusion/vae/controlnet assignments (default: auto), e.g. auto,vae=off. Overrides legacy convolution flags",
          [this](int argc, const char** argv, int index) {
@@ -948,6 +964,7 @@ std::string SDContextParams::to_string() const {
         << "  flash_attn_mode: " << flash_attn_mode << ",\n"
         << "  conv_direct_mode: " << conv_direct_mode << ",\n"
         << "  sage_attn: " << sage_attn << ",\n"
+        << "  linear_type: " << linear_type.value_or("auto") << ",\n"
         << "  linear_scale: " << linear_scale << ",\n"
         << "  attn_scale: " << attn_scale << ",\n"
         << "  diffusion_conv_direct: " << diffusion_conv_direct << ",\n"
@@ -965,6 +982,7 @@ bool SDContextParams::configure_dgl(sd_dgl_ctx_t* ctx) const {
         return !option || sd_dgl_ctx_set(ctx, key, std::to_string(*option).c_str());
     };
     return (!max_vram || sd_dgl_ctx_set(ctx, "max_vram", max_vram->c_str())) &&
+           (!linear_type || sd_dgl_ctx_set(ctx, "linear_type", linear_type->c_str())) &&
            set("auto_fit", auto_fit) &&
            set("conditioning_cache_size", conditioning_cache_size) &&
            set("batched_cfg", batched_cfg) &&
@@ -1025,6 +1043,7 @@ SDOptPtr SDContextParams::to_context_opt() {
     opt.set_string("flash_attn_mode", flash_attn_mode);
     opt.set_string("conv_direct_mode", conv_direct_mode);
     opt.set_bool("sage_attn", sage_attn);
+    opt.set_string("linear_type", linear_type);
     opt.set_float("linear_scale", linear_scale);
     opt.set_float("attn_scale", attn_scale);
     opt.set_bool("tae_preview_only", taesd_preview_only);

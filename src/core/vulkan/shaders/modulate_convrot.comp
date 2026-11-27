@@ -5,6 +5,7 @@
 layout(constant_id = 0) const uint K         = 4096;
 layout(constant_id = 1) const bool AFFINE    = false;
 layout(constant_id = 2) const bool HAS_SHIFT = true;
+layout(constant_id = 3) const bool ROTATE    = true;
 layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
 layout(binding = 0) readonly buffer X {
     float data_x[];
@@ -119,24 +120,26 @@ void main() {
                 value = (values[col] - mean) * inv_std;
                 value *= data_m[p.m_offset + col];
             }
-            values[col] = value * (1.0 / 16.0);
+            values[col] = ROTATE ? value * (1.0 / 16.0) : value;
         }
         barrier();
-        [[unroll]] for (uint stride = 1; stride < 256; stride *= 4) {
-            for (uint i = tid; i < K / 4; i += 512) {
-                const uint group          = i / 64;
-                const uint lane           = i % 64;
-                const uint base           = group * 256 + (lane / stride) * 4 * stride + lane % stride;
-                const float a             = values[base];
-                const float b             = values[base + stride];
-                const float c             = values[base + 2 * stride];
-                const float d             = values[base + 3 * stride];
-                values[base]              = a + b + c - d;
-                values[base + stride]     = a + b - c + d;
-                values[base + 2 * stride] = a - b + c + d;
-                values[base + 3 * stride] = -a + b + c + d;
+        if (ROTATE) {
+            [[unroll]] for (uint stride = 1; stride < 256; stride *= 4) {
+                for (uint i = tid; i < K / 4; i += 512) {
+                    const uint group          = i / 64;
+                    const uint lane           = i % 64;
+                    const uint base           = group * 256 + (lane / stride) * 4 * stride + lane % stride;
+                    const float a             = values[base];
+                    const float b             = values[base + stride];
+                    const float c             = values[base + 2 * stride];
+                    const float d             = values[base + 3 * stride];
+                    values[base]              = a + b + c - d;
+                    values[base + stride]     = a + b - c + d;
+                    values[base + 2 * stride] = a - b + c + d;
+                    values[base + 3 * stride] = -a + b + c + d;
+                }
+                barrier();
             }
-            barrier();
         }
         float maximum = 0.0;
         [[unroll]] for (uint col = tid; col < K; col += 512) {

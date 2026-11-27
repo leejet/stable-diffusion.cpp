@@ -8,6 +8,8 @@
 
 #include "value.h"
 
+enum class SDBackendModule;
+
 namespace sd::dgl {
 
     struct CallbackSignature {
@@ -56,6 +58,7 @@ namespace sd::dgl {
         bool sampling = false;
         std::function<PreparedResource(Values&)> prepare;
         ModelUse model_use = ModelUse::Automatic;
+        std::optional<SDBackendModule> backend_module;
 
         bool resource() const { return bool(prepare); }
     };

@@ -1,4 +1,5 @@
 #include "options.h"
+#include "core/ggml_extend_backend.h"
 #include "core/option_types.h"
 #include "core/util.h"
 #include "tensor.h"
@@ -337,6 +338,14 @@ static void add_context_specs(std::vector<ParamSpec>& specs) {
     specs.push_back(parameter<std::string>("conv_direct_mode", ParamType::String, Context, [](const std::string& value, sd::OptConfig& config) { config.context.conv_direct_mode = value.c_str(); }));
     specs.push_back(parameter<std::string>("diffusion_model_path", ParamType::String, Context, [](const std::string& value, sd::OptConfig& config) { config.context.diffusion_model_path = value.c_str(); }));
     specs.push_back(parameter<std::string>("flash_attn_mode", ParamType::String, Context, [](const std::string& value, sd::OptConfig& config) { config.context.flash_attn_mode = value.c_str(); }));
+    auto linear_type = parameter<std::string>(
+        "linear_type", ParamType::String, Context | Upscaler, [](const std::string& value, sd::OptConfig& config) { config.context.linear_type = value.c_str(); });
+    linear_type.valid = [](const ParamValue& value) {
+        SDBackendAssignment assignment;
+        return sd_parse_linear_type_assignment(std::get<std::string>(value), &assignment, nullptr);
+    };
+    linear_type.invalid_reason = "expected auto, i8, raw, or module assignments such as dit=i8";
+    specs.push_back(std::move(linear_type));
     specs.push_back(integer_parameter(
         "n_threads", Context | Upscaler, [](const int64_t& value, sd::OptConfig& config) { config.context.n_threads = static_cast<int>(value); }, 1, INT32_MAX));
     specs.push_back(parameter<std::string>("params_backend", ParamType::String, Context | Upscaler, [](const std::string& value, sd::OptConfig& config) { config.context.params_backend = value.c_str(); }));

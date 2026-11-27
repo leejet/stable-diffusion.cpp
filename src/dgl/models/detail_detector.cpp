@@ -302,6 +302,7 @@ namespace sd::dgl::models {
             return false;
         }
 
+        detector->set_linear_i8_enabled(params_.linear_i8);
         class_names.assign(static_cast<size_t>(detector->config.num_classes), "");
         auto names_item = catalog.get_metadata().find("yolov8.names");
         if (names_item != catalog.get_metadata().end()) {

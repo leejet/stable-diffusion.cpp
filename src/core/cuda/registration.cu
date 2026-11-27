@@ -10,6 +10,7 @@ void sd_ggml_register_cuda_window_attention(ggml_backend_dev_t device);
 namespace SD_CUDA_NAMESPACE {
     void register_rope(ggml_backend_dev_t device);
     void register_i8(ggml_backend_dev_t device);
+    void register_requantize(ggml_backend_dev_t device);
     void register_i8_lora_merge(ggml_backend_dev_t device);
     void register_w4(ggml_backend_dev_t device);
     void register_convrot(ggml_backend_dev_t device);
@@ -31,6 +32,7 @@ namespace SD_CUDA_NAMESPACE {
         register_affine(device);
         register_modulate(device);
         register_i8(device);
+        register_requantize(device);
         register_i8_lora_merge(device);
         register_w4(device);
         register_convrot(device);

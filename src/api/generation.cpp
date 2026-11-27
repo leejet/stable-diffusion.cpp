@@ -29,6 +29,8 @@ namespace sd::api {
         : model(copy_options(source), purpose) {
         const auto& settings = model.config.context;
         execution.set("n_threads", std::to_string(settings.n_threads));
+        if (settings.linear_type)
+            execution.set("linear_type", settings.linear_type);
         execution.set("conditioning_cache_size", std::to_string(settings.conditioning_cache_size));
         for (const auto& [key, enabled] : std::map<std::string, bool>{
                  {"auto_fit", settings.auto_fit}, {"batched_cfg", settings.batched_cfg}, {"enable_mmap", settings.enable_mmap}, {"eager_load", settings.eager_load}, {"disable_prefetch", settings.disable_prefetch}, {"disable_segmented_compute", settings.disable_segmented_compute}})

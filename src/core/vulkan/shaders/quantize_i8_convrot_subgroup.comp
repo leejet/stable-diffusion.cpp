@@ -56,8 +56,13 @@ void transform_group(uint row, uint group, out float v[8]) {
         precise float activated = data_b[base + lane + j * 32] * gate;
         value                   = activated;
 #endif
+#ifdef UNROTATED
+        v[j] = value;
+#else
         v[j] = value * (1.0 / 16.0);
+#endif
     }
+#ifndef UNROTATED
     [[unroll]] for (uint stride = 1; stride <= 4; stride *= 4) {
         const uint first = lane & ~(3u * stride);
         [[unroll]] for (uint j = 0; j < 8; ++j) {
@@ -79,6 +84,7 @@ void transform_group(uint row, uint group, out float v[8]) {
         v[j + 4] = r.z;
         v[j + 6] = r.w;
     }
+#endif
 }
 
 void main() {
