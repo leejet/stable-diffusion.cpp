@@ -30,6 +30,7 @@ struct SDSvrParams {
     std::string dgl_dir = "dgl";
     bool media_view = true;
     std::vector<std::string> model_dirs;
+    std::string output_dir;
     std::vector<std::string> api_keys;
     std::string api_key_file;
     std::vector<std::string> cors_origins;
