@@ -166,12 +166,14 @@ these formats because they require the application extension API.
 
 ## Runtime requantization to INT8
 
-Use `--linear-type i8` to run eligible Q8_0 linear layers through INT8 GEMM on
-CUDA, HIP, MUSA, and Vulkan. A bare mode applies to all models in the context,
-including diffusion models and text encoders loaded with `--llm`. The default
-is `auto`, which currently behaves like `raw`. With `--linear-type raw`, each
-layer uses its original execution path. Native INT8 weights use their INT8
-path in all three modes.
+Use `--linear-type i8` to run eligible Q4_0, Q4_1, Q5_0, Q5_1, and Q8_0 linear
+layers through INT8 GEMM on CUDA, HIP, MUSA, and Vulkan. A bare mode applies to
+all models in the context, including diffusion models and text encoders loaded
+with `--llm`. The default is `auto`, which currently behaves like `raw`. With
+`--linear-type raw`, each layer uses its original execution path. Native INT8
+weights use their INT8 path in all three modes. For floating-point checkpoints,
+use `--type q4_0` (or another supported weight type) to quantize eligible weights
+at load time.
 
 Use module assignments to apply a mode selectively. For example,
 `--linear-type dit=i8` selects runtime conversion for the diffusion module.
@@ -189,14 +191,14 @@ dot products and compatible storage buffer sizes and alignment. The C API option
 use `sd_dgl_ctx_set(ctx, "linear_type", "dit=i8")` or pass
 `--linear-type dit=i8` when running the script from the CLI.
 
-At runtime, sd.cpp dequantizes the Q8_0 blocks, rotates the weights, and
+At runtime, sd.cpp dequantizes the weight blocks, rotates the weights, and
 requantizes them to INT8 with one scale per output channel. It applies the
 same rotation to the activations before quantizing each input row. The
 converted matrix uses temporary GPU memory and feeds the standard INT8 kernels
 and their fusions. The checkpoint file stays in its original format.
 Requantization changes numerical results, and conversion overhead depends on
-matrix shape. Row-split models and unsupported layers use the standard Q8_0
-path.
+matrix shape. Row-split models and unsupported layers use their original
+execution paths.
 
 ## Example
 

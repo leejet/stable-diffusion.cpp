@@ -217,7 +217,7 @@ ggml_tensor* ggml_ext_linear(GGMLRunnerContext* runner_ctx,
     const auto mul_mat = [&](ggml_tensor* input) {
 #ifndef SD_USE_UPSTREAM_GGML
         // The INT8 path accumulates in INT32 and rescales in FP32.
-        if (runner_ctx->requantize_to_i8 && w->type == GGML_TYPE_Q8_0 && input->type == GGML_TYPE_F32 &&
+        if (runner_ctx->requantize_to_i8 && sd_ggml_requantize_i8_block_bytes(w->type) && input->type == GGML_TYPE_F32 &&
             (sd_backend_is(runner_ctx->backend, "CUDA") ||
              sd_backend_is(runner_ctx->backend, "ROCm") ||
              sd_backend_is(runner_ctx->backend, "MUSA") ||
@@ -227,7 +227,7 @@ ggml_tensor* ggml_ext_linear(GGMLRunnerContext* runner_ctx,
             if (quantized && ggml_backend_supports_op(runner_ctx->backend, quantized)) {
                 // Make the conversion depend on the activation so decoded weights only live near their GEMM.
                 ggml_tensor* inputs[] = {w, quantized};
-                auto* converted       = ggml_ext_op_create(ctx, sd_ggml_requantize_q8_op(), inputs, 2, nullptr);
+                auto* converted       = ggml_ext_op_create(ctx, sd_ggml_requantize_i8_op(), inputs, 2, nullptr);
                 if (converted && ggml_backend_supports_op(runner_ctx->backend, converted)) {
                     const int64_t k = w->ne[0], n = w->ne[1];
                     auto* weight = ggml_view_2d(ctx, converted, k, n, k, 0);
