@@ -217,7 +217,7 @@ ggml_tensor* ggml_ext_linear(GGMLRunnerContext* runner_ctx,
     const auto mul_mat = [&](ggml_tensor* input) {
 #ifndef SD_USE_UPSTREAM_GGML
         // The INT8 path accumulates in INT32 and rescales in FP32.
-        if (runner_ctx->requantize_to_i8 && sd_ggml_requantize_i8_block_bytes(w->type) && input->type == GGML_TYPE_F32 &&
+        if (runner_ctx->requantize_to_i8 && sd_ggml_requantize_i8_block(w->type).bytes && input->type == GGML_TYPE_F32 &&
             (sd_backend_is(runner_ctx->backend, "CUDA") ||
              sd_backend_is(runner_ctx->backend, "ROCm") ||
              sd_backend_is(runner_ctx->backend, "MUSA") ||

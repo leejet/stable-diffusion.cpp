@@ -23,11 +23,22 @@
 #include "quantize_i8_convrot_subgroup.h"
 #include "quantize_i8_rowwise.h"
 #include "quantize_i8_rowwise_subgroup.h"
+#include "requantize_q2_k.h"
+#include "requantize_q2_k_subgroup.h"
+#include "requantize_q3_k.h"
+#include "requantize_q3_k_subgroup.h"
 #include "requantize_q4_0.h"
 #include "requantize_q4_1.h"
+#include "requantize_q4_k.h"
+#include "requantize_q4_k_subgroup.h"
 #include "requantize_q5_0.h"
 #include "requantize_q5_1.h"
+#include "requantize_q5_k.h"
+#include "requantize_q5_k_subgroup.h"
+#include "requantize_q6_k.h"
+#include "requantize_q6_k_subgroup.h"
 #include "requantize_q8.h"
+#include "requantize_q8_k.h"
 #include "requantize_q8_register.h"
 #include "requantize_q8_subgroup.h"
 #include "rms_modulate_convrot.h"
@@ -564,6 +575,15 @@ namespace sd_vulkan_i8 {
             return GGML_STATUS_FAILED;
         const ggml_ext_vulkan_binding bindings[] = {{input}, dst};
         const uint32_t groups[]                  = {std::min(rows, d.info.max_group_count[0]), 1, 1};
+        constexpr uint32_t words_per_round       = 8 * 64;
+        constexpr uint32_t max_cached_groups     = 8;
+        const bool subgroup_rotation             = d.subgroup && d.info.max_group_size[0] >= 256;
+        const bool q8_subgroup                   = q8 && d.info.float16;
+        const bool k_subgroup                    = subgroup_rotation && words >= words_per_round && input->type != GGML_TYPE_Q8_K &&
+                                                   sd_ggml_requantize_i8_block(input->type).size == 256;
+        const uint32_t cached_groups             = words <= 2 * words_per_round ? 2 : words <= 4 * words_per_round ? 4
+                                                                                                                   : max_cached_groups;
+        const bool retain                        = subgroup_rotation && q8_subgroup && words <= max_cached_groups * words_per_round;
         auto pipeline                            = SD_VK_PIPELINE(quantize_i8_rowwise, 2, PackParameters);
         switch (input->type) {
             case GGML_TYPE_Q4_0:
@@ -579,22 +599,36 @@ namespace sd_vulkan_i8 {
                 pipeline = SD_VK_PIPELINE(requantize_q5_1, 2, PackParameters);
                 break;
             case GGML_TYPE_Q8_0:
-                pipeline = SD_VK_PIPELINE(requantize_q8, 2, PackParameters);
+                pipeline = retain ? SD_VK_PIPELINE(requantize_q8_register, 2, PackParameters) : SD_VK_PIPELINE(requantize_q8, 2, PackParameters);
+                break;
+            case GGML_TYPE_Q2_K:
+                pipeline = k_subgroup ? SD_VK_PIPELINE(requantize_q2_k_subgroup, 2, PackParameters) : SD_VK_PIPELINE(requantize_q2_k, 2, PackParameters);
+                break;
+            case GGML_TYPE_Q3_K:
+                pipeline = k_subgroup ? SD_VK_PIPELINE(requantize_q3_k_subgroup, 2, PackParameters) : SD_VK_PIPELINE(requantize_q3_k, 2, PackParameters);
+                break;
+            case GGML_TYPE_Q4_K:
+                pipeline = k_subgroup ? SD_VK_PIPELINE(requantize_q4_k_subgroup, 2, PackParameters) : SD_VK_PIPELINE(requantize_q4_k, 2, PackParameters);
+                break;
+            case GGML_TYPE_Q5_K:
+                pipeline = k_subgroup ? SD_VK_PIPELINE(requantize_q5_k_subgroup, 2, PackParameters) : SD_VK_PIPELINE(requantize_q5_k, 2, PackParameters);
+                break;
+            case GGML_TYPE_Q6_K:
+                pipeline = k_subgroup ? SD_VK_PIPELINE(requantize_q6_k_subgroup, 2, PackParameters) : SD_VK_PIPELINE(requantize_q6_k, 2, PackParameters);
+                break;
+            case GGML_TYPE_Q8_K:
+                pipeline = SD_VK_PIPELINE(requantize_q8_k, 2, PackParameters);
                 break;
             case GGML_TYPE_F32:
                 break;
             default:
                 return GGML_STATUS_FAILED;
         }
-        constexpr uint32_t words_per_round = 8 * 64;
-        const uint32_t cached_groups       = words <= 2 * words_per_round ? 2 : words <= 4 * words_per_round ? 4
-                                                                                                             : 8;
-        if (d.subgroup && (!requantize || (q8 && d.info.float16))) {
-            if (q8 && words <= cached_groups * words_per_round && d.info.max_group_size[0] >= 256) {
-                pipeline                = SD_VK_PIPELINE(requantize_q8_register, 2, PackParameters);
+        if (d.subgroup && (k_subgroup || !requantize || q8_subgroup)) {
+            if (retain) {
                 pipeline.constants      = &cached_groups;
                 pipeline.constant_count = 1;
-            } else {
+            } else if (!k_subgroup) {
                 pipeline = q8 ? SD_VK_PIPELINE(requantize_q8_subgroup, 2, PackParameters) : SD_VK_PIPELINE(quantize_i8_rowwise_subgroup, 2, PackParameters);
             }
             pipeline.full_subgroups         = d.info.full_subgroups;

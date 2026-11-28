@@ -1,4 +1,5 @@
 #include <climits>
+#include <type_traits>
 
 #include "convrot_kernel.h"
 #include "core/ggml_extensions.h"
@@ -10,11 +11,10 @@ namespace SD_CUDA_NAMESPACE {
         using i8::blas_supported;
         using i8::warp_reduce_max;
 
-        constexpr int block_size = SD_REQUANTIZE_I8_BLOCK_SIZE;
-
         // GGML stores FP16 parameters, then the Q5 high bits, then the quants.
         template <ggml_type type>
         struct QuantBlock {
+            static constexpr int block_size = 32;
             static constexpr int bits       = type == GGML_TYPE_Q8_0 ? 8 : (type == GGML_TYPE_Q5_0 || type == GGML_TYPE_Q5_1 ? 5 : 4);
             static constexpr bool affine    = type == GGML_TYPE_Q4_1 || type == GGML_TYPE_Q5_1;
             static constexpr int high_words = bits == 5 ? 2 : 0;
@@ -39,29 +39,151 @@ namespace SD_CUDA_NAMESPACE {
             }
         };
 
+        template <ggml_type type>
+        struct QuantKBlock {
+            static_assert(type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K);
+            static constexpr int high_bytes = type == GGML_TYPE_Q5_K ? 32 : 0;
+            half d, dmin;
+            uint8_t scales[12];
+            uint8_t quants[high_bytes + 128];
+
+            __device__ __forceinline__ float decode(int i) const {
+                const int group = i / 32;
+                const int scale = group < 4 ? scales[group] & 63 : (scales[group + 4] & 15) | ((scales[group - 4] >> 6) << 4);
+                const int min   = group < 4 ? scales[group + 4] & 63 : (scales[group + 4] >> 4) | ((scales[group] >> 6) << 4);
+                int value       = (quants[high_bytes + i / 64 * 32 + i % 32] >> (4 * (group % 2))) & 15;
+                if constexpr (high_bytes != 0)
+                    value |= ((quants[i % 32] >> group) & 1) << 4;
+                return (__half2float(d) * scale) * value - __half2float(dmin) * min;
+            }
+        };
+
+        template <>
+        struct QuantKBlock<GGML_TYPE_Q2_K> {
+            uint8_t scales[16];
+            uint8_t quants[64];
+            half d, dmin;
+
+            __device__ __forceinline__ float decode(int i) const {
+                const int scale = scales[i / 16];
+                const int value = (quants[i / 128 * 32 + i % 32] >> (2 * (i / 32 % 4))) & 3;
+                return (__half2float(d) * (scale & 15)) * value - __half2float(dmin) * (scale >> 4);
+            }
+        };
+
+        template <>
+        struct QuantKBlock<GGML_TYPE_Q3_K> {
+            uint8_t high[32];
+            uint8_t quants[64];
+            uint8_t scales[12];
+            half d;
+
+            __device__ __forceinline__ float decode(int i) const {
+                const int group      = i / 16;
+                const int scale_low  = (scales[group % 8] >> (4 * (group / 8))) & 15;
+                const int scale_high = (scales[8 + group % 4] >> (2 * (group / 4))) & 3;
+                const int scale      = (scale_low | (scale_high << 4)) - 32;
+                const int low        = (quants[i / 128 * 32 + i % 32] >> (2 * (i / 32 % 4))) & 3;
+                const int value      = low - ((high[i % 32] >> (i / 32)) & 1 ? 0 : 4);
+                return (__half2float(d) * scale) * value;
+            }
+        };
+
+        template <>
+        struct QuantKBlock<GGML_TYPE_Q6_K> {
+            uint8_t low[128];
+            uint8_t high[64];
+            int8_t scales[16];
+            half d;
+
+            __device__ __forceinline__ float decode(int i) const {
+                const int low_bits  = (low[i / 128 * 64 + i % 64] >> (4 * (i / 64 % 2))) & 15;
+                const int high_bits = (high[i / 128 * 32 + i % 32] >> (2 * (i / 32 % 4))) & 3;
+                const int value     = (low_bits | (high_bits << 4)) - 32;
+                return (__half2float(d) * scales[i / 16]) * value;
+            }
+        };
+
+        template <>
+        struct QuantKBlock<GGML_TYPE_Q8_K> {
+            float d;
+            int8_t quants[256];
+            int16_t sums[16];
+
+            __device__ __forceinline__ float decode(int i) const {
+                return d * quants[i];
+            }
+        };
+
+        constexpr int lanes             = 32;
+        constexpr int requantize_warps  = 8;
+        constexpr int group_size        = 256;
+        constexpr int weights_per_round = requantize_warps * group_size;
+
+        template <ggml_type type>
+        using WeightBlock = std::conditional_t<sd_ggml_requantize_i8_block(type).size == group_size, QuantKBlock<type>, QuantBlock<type>>;
+
         static __device__ __forceinline__ int8_t requantize_i8_value(float value) {
             return int8_t(__float2int_rn(fminf(127.f, fmaxf(-127.f, value))));
         }
 
-        template <ggml_type type>
-        static __device__ __forceinline__ void load_rotated_group(const QuantBlock<type>* blocks, int lane, float (&values)[8]) {
-#pragma unroll
-            for (int j = 0; j < 8; ++j)
-                values[j] = blocks[j].decode(lane) * (1.0f / 16.0f);
-            sd_convrot::rotate_h256(values, lane);
+        static __device__ __forceinline__ float h256_signed(float value, int i) {
+            return (__popc(i & (i >> 1) & 0x55) & 1) ? -value : value;
         }
 
-        constexpr int requantize_warps  = 8;
-        constexpr int blocks_per_group  = 256 / block_size;
-        constexpr int blocks_per_round  = requantize_warps * blocks_per_group;
-        constexpr int weights_per_round = blocks_per_round * block_size;
+        static __device__ __forceinline__ void rotate_k_group(float (&values)[8], int lane) {
+            // H4 is a Walsh-Hadamard transform with sign changes on index 3 and
+            // a swap of the two index bits. Permute the inputs for contiguous stores.
+#pragma unroll
+            for (int stride = 1; stride < lanes; stride *= 2) {
+#pragma unroll
+                for (int j = 0; j < 8; ++j) {
+                    const float value = values[j];
+                    const float other = cuda_shuffle_xor(value, stride, lanes);
+                    values[j]         = (lane & stride ? -value : value) + other;
+                }
+            }
+#pragma unroll
+            for (int stride = 1; stride < 8; stride *= 2) {
+#pragma unroll
+                for (int j = 0; j < 8; ++j) {
+                    if ((j & stride) == 0) {
+                        const float a      = values[j];
+                        const float b      = values[j + stride];
+                        values[j]          = a + b;
+                        values[j + stride] = a - b;
+                    }
+                }
+            }
+        }
 
-        template <ggml_type type, int cached_groups>
-        static __global__ void requantize_i8_weights(const QuantBlock<type>* weights, int8_t* decoded, float* scales, int64_t blocks_per_channel) {
-            const int lane     = threadIdx.x;
-            const int warp     = threadIdx.y;
-            const auto* blocks = weights + int64_t(blockIdx.x) * blocks_per_channel;
-            auto* output       = decoded + int64_t(blockIdx.x) * blocks_per_channel * block_size;
+        template <ggml_type type, int block_size = sd_ggml_requantize_i8_block(type).size>
+        static __device__ __forceinline__ void load_rotated_group(const WeightBlock<type>* blocks, int lane, float (&values)[8]) {
+#pragma unroll
+            for (int j = 0; j < 8; ++j) {
+                const int i = j * lanes + lane;
+                if constexpr (cuda_kind == GGML_EXT_GPU_CUDA && block_size == group_size) {
+                    const int source = ((i & 0x55) << 1) | ((i & 0xAA) >> 1);
+                    values[j]        = h256_signed(blocks[0].decode(source) * (1.0f / 16.0f), i);
+                } else {
+                    values[j] = blocks[i / block_size].decode(i % block_size) * (1.0f / 16.0f);
+                }
+            }
+            if constexpr (cuda_kind == GGML_EXT_GPU_CUDA && block_size == group_size) {
+                rotate_k_group(values, lane);
+            } else {
+                sd_convrot::rotate_h256(values, lane);
+            }
+        }
+
+        template <ggml_type type, int cached_groups, int block_size = sd_ggml_requantize_i8_block(type).size>
+        static __global__ void requantize_i8_weights(const WeightBlock<type>* weights, int8_t* decoded, float* scales, int64_t blocks_per_channel) {
+            constexpr int blocks_per_group = group_size / block_size;
+            constexpr int blocks_per_round = requantize_warps * blocks_per_group;
+            const int lane                 = threadIdx.x;
+            const int warp                 = threadIdx.y;
+            const auto* blocks             = weights + int64_t(blockIdx.x) * blocks_per_channel;
+            auto* output                   = decoded + int64_t(blockIdx.x) * blocks_per_channel * block_size;
 
             __shared__ float maxima[requantize_warps];
             // Keep a bounded number of rotated groups in registers across the scale reduction.
@@ -76,7 +198,7 @@ namespace SD_CUDA_NAMESPACE {
                         break;
                 }
                 float values[8];
-                load_rotated_group(blocks + block, lane, values);
+                load_rotated_group<type>(blocks + block, lane, values);
 #pragma unroll
                 for (int j = 0; j < 8; ++j) {
                     if constexpr (cached_groups > 0)
@@ -113,11 +235,14 @@ namespace SD_CUDA_NAMESPACE {
                 }
                 float values[8];
                 if constexpr (cached_groups == 0)
-                    load_rotated_group(blocks + block, lane, values);
+                    load_rotated_group<type>(blocks + block, lane, values);
 #pragma unroll
                 for (int j = 0; j < 8; ++j) {
-                    const float value                       = cached_groups > 0 ? retained[slot][j] : values[j];
-                    output[(block + j) * block_size + lane] = requantize_i8_value(value * inverse);
+                    float value = cached_groups > 0 ? retained[slot][j] : values[j];
+                    const int i = j * lanes + lane;
+                    if constexpr (cuda_kind == GGML_EXT_GPU_CUDA && block_size == group_size)
+                        value = h256_signed(value, i);
+                    output[block * block_size + i] = requantize_i8_value(value * inverse);
                 }
             }
         }
@@ -125,20 +250,23 @@ namespace SD_CUDA_NAMESPACE {
         static bool requantize_i8_supports(ggml_backend_dev_t device, const ggml_tensor* node, void*) {
             const auto* weight = node->src[0];
             const int64_t k = weight->ne[0], n = weight->ne[1];
-            const auto info = cuda_device_info(device);
-            return info.device >= 0 && k <= INT_MAX / 16384 && n <= INT_MAX && aligned(weight, alignof(uint16_t)) &&
+            const auto info        = cuda_device_info(device);
+            const size_t alignment = weight->type == GGML_TYPE_Q8_K ? alignof(float) : alignof(uint16_t);
+            return info.device >= 0 && k <= INT_MAX / 16384 && n <= INT_MAX && aligned(weight, alignment) &&
                    (cuda_kind != GGML_EXT_GPU_CUDA || blas_supported(device, info, n));
         }
 
         template <ggml_type type>
         static void launch_requantize(const ggml_tensor* weight, int8_t* values, CUDAStream stream) {
-            using Block = QuantBlock<type>;
-            static_assert(sizeof(Block) == sd_ggml_requantize_i8_block_bytes(type) && alignof(Block) == alignof(uint16_t));
+            using Block          = WeightBlock<type>;
+            constexpr auto block = sd_ggml_requantize_i8_block(type);
+            static_assert(sizeof(Block) == block.bytes);
+            static_assert(alignof(Block) == (type == GGML_TYPE_Q8_K ? alignof(float) : alignof(uint16_t)));
             const int64_t k = weight->ne[0], n = weight->ne[1];
             auto* scales        = reinterpret_cast<float*>(values + k * n);
             const auto* weights = static_cast<const Block*>(weight->data);
-            const dim3 threads(block_size, requantize_warps);
-            const int64_t blocks_per_channel = k / block_size;
+            const dim3 threads(lanes, requantize_warps);
+            const int64_t blocks_per_channel = k / block.size;
             if (cuda_kind == GGML_EXT_GPU_CUDA && k <= 2 * weights_per_round) {
                 requantize_i8_weights<type, 2><<<unsigned(n), threads, 0, stream>>>(weights, values, scales, blocks_per_channel);
             } else if (cuda_kind == GGML_EXT_GPU_CUDA && k <= 4 * weights_per_round) {
@@ -173,6 +301,24 @@ namespace SD_CUDA_NAMESPACE {
                     break;
                 case GGML_TYPE_Q8_0:
                     launch_requantize<GGML_TYPE_Q8_0>(weight, values, stream);
+                    break;
+                case GGML_TYPE_Q2_K:
+                    launch_requantize<GGML_TYPE_Q2_K>(weight, values, stream);
+                    break;
+                case GGML_TYPE_Q3_K:
+                    launch_requantize<GGML_TYPE_Q3_K>(weight, values, stream);
+                    break;
+                case GGML_TYPE_Q4_K:
+                    launch_requantize<GGML_TYPE_Q4_K>(weight, values, stream);
+                    break;
+                case GGML_TYPE_Q5_K:
+                    launch_requantize<GGML_TYPE_Q5_K>(weight, values, stream);
+                    break;
+                case GGML_TYPE_Q6_K:
+                    launch_requantize<GGML_TYPE_Q6_K>(weight, values, stream);
+                    break;
+                case GGML_TYPE_Q8_K:
+                    launch_requantize<GGML_TYPE_Q8_K>(weight, values, stream);
                     break;
                 default:
                     return GGML_STATUS_FAILED;
