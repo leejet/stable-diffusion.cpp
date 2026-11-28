@@ -2,6 +2,14 @@
 # docs/models/minimax_h3.md — AV continuation: chain segment B onto segment A's
 # tail latent (video head and audio head pinned as never-denoised), seamless
 # multi-part video without pixel-frame anchoring drift.
+#
+# The overlap is ONE time interval, `overlap_frames` pixel frames of A's tail.
+# Video and audio latent counts are both derived from it, so the streams stay
+# aligned for any `frames`. To join A and B: decode B, then drop its first
+# `overlap_frames` pixel frames of video and the matching overlap duration of
+# audio before concatenating (see the join note in main() below — the pinned
+# latents land at different positions within Sol-H3's five-latent decoder
+# blocks than they occupied in A, so trimming is what makes the seam clean).
 
 var {
     model_path = "../models/diffusion_models/minimax_h3_fl2va-Q4_K_M.gguf"
@@ -28,9 +36,13 @@ var {
     scheduler = "discrete"
     audio_scale = 4
 
-    # latent frames carried from segment A's tail; clamped to the previous
-    # segment's length, and the same count pins audio latent frames
-    pin_frames = 4
+    # Pixel frames of segment A's tail carried into segment B's head — the
+    # single time interval both pinned latent counts derive from. 0 means no
+    # pinning: B degrades to a plain continuation. main() caps the derived
+    # counts so B always keeps at least half of its latents to generate.
+    # Default 12 frames at 24 fps = 0.5 s = 4 video latents (17-frame blocks,
+    # 5 latents each) = 20 audio latents (40 per second).
+    overlap_frames = 12
 }
 
 fn pack_av(video, audio, audio_scale) {
@@ -94,17 +106,34 @@ fn main() {
     video::save(output_a_path, {frames = frames_a, fps_num = fps, fps_den = 1}, audio = audio_a)
 
     # ---------- segment B: continuation ----------
+    # Sol-H3 timing: video latents come in five-latent/17-frame blocks after
+    # the first (video_frames_to_latent_frames: frames <= 5 -> 2 latents, else
+    # ((frames - 5) / 17) * 5 + 2; decoded_frames(t) = 4t - 3*ceil(t/5)), and
+    # the audio VAE emits 40 latents per second. Both pinned counts derive
+    # from the SAME `overlap_frames` pixel-frame interval, so the video and
+    # audio overlaps always cover the same duration for any `frames`.
     packed_prev = tensor::load(latent_a_path)
     video_prev = packed_prev[:, :, :, :c_video]
     # audio latent is t-major [T, 2, 32, 1]: the tail slice carries whole
     # streams, so no flat-offset math is needed even for unequal segments
     audio_prev = unpack_audio(packed_prev, channels = c_video, audio_shape = tensor::shape(audio_zeros), audio_scale = audio_scale)
     t_audio = tensor::shape(audio_zeros)[0]
-    # negative-endpoint slices clip to bounds, so the pinned tail length is
-    # min(pin_frames, previous segment length, current segment length)
-    video_tail_raw = video_prev[:, :, -pin_frames:, :]
+    t_prev = tensor::shape(video_prev)[2]
+    ta_prev = tensor::shape(audio_prev)[0]
+
+    h_req = math::ceil_div(overlap_frames * 5, 17)       # video latents covering the interval
+    n_req = math::ceil_div(overlap_frames * 40, fps)     # audio latents covering the interval
+    # Cap the overlap so B keeps room to continue: never carry more than half
+    # of B's latents on either stream (nor more than A's tail can give).
+    # overlap_frames = 0 leaves h_req = n_req = 0: the slices below go empty,
+    # the mask becomes all-ones, and B is a plain continuation — handled
+    # without special-casing. Positive-index slices are load-bearing here: a
+    # negative-endpoint slice with a zero count would select the WHOLE tail.
+    h_cap = math::min(math::min(h_req, math::ceil_div(t_video, 2)), t_prev)
+    n_cap = math::min(math::min(n_req, math::ceil_div(t_audio, 2)), ta_prev)
+    video_tail_raw = video_prev[:, :, t_prev - h_cap:, :]
     video_tail = video_tail_raw[:, :, -t_video:, :]
-    audio_tail_raw = audio_prev[-pin_frames:, :, :, :]
+    audio_tail_raw = audio_prev[ta_prev - n_cap:, :, :, :]
     audio_tail = audio_tail_raw[-t_audio:, :, :, :]
     h = tensor::shape(video_tail)[2]
     n = tensor::shape(audio_tail)[0]
@@ -137,5 +166,16 @@ fn main() {
                           tiling = {enabled = true, tile_size_w = 256, tile_size_h = 256})
     audio_b_out = audio_vae_decode(audio_vae, unpack_audio(latent_b, channels = c_video, audio_shape = tensor::shape(audio_zeros), audio_scale = audio_scale))
     video::save(output_b_path, {frames = frames_b, fps_num = fps, fps_den = 1}, audio = audio_b_out)
-    return {video = {frames = frames_b, fps_num = fps, fps_den = 1}, latent = latent_b, audio = audio_b_out}
+
+    # Join point: decoded_frames(t) = 4t - 3*ceil(t/5) for Sol-H3, so the h
+    # pinned head latents reconstruct covered_video frames of A's tail (>=
+    # overlap_frames). Trim exactly `overlap_frames` from BOTH streams —
+    # B's first overlap_frames pixel frames of video and the matching
+    # overlap_frames/fps seconds of audio — then concatenate A. Both trims
+    # come from the same interval, so the streams stay in sync for any
+    # `frames`. covered_* are the exact reconstructed counts, for checking.
+    covered_video = (4 * t_video - 3 * math::ceil_div(t_video, 5)) - (4 * (t_video - h) - 3 * math::ceil_div(t_video - h, 5))
+    covered_audio = math::ceil_div(n * fps, 40)
+    return {video = {frames = frames_b, fps_num = fps, fps_den = 1}, latent = latent_b, audio = audio_b_out,
+            join = {trim_frames = overlap_frames, covered_video_frames = covered_video, covered_audio_frames = covered_audio}}
 }
