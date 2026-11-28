@@ -33,20 +33,50 @@ namespace sd::dgl::ops {
         return {uint32_t(shape[1]), uint32_t(shape[2]), 3, const_cast<uint8_t*>(data)};
     }
 
-    VideoReadResult load_video(const std::filesystem::path& path, size_t max_frames, int64_t fps_num, int64_t fps_den, bool include_audio) {
-        std::ifstream file(path, std::ios::binary);
+    VideoSource::VideoSource(const std::filesystem::path& path)
+        : file_(path, std::ios::binary | std::ios::ate) {
+        const auto end = file_ ? std::streamoff(file_.tellg()) : std::streamoff(-1);
+        size_          = end > 0 ? uint64_t(end) : 0;
+    }
+
+    VideoSource::VideoSource(const void* data, size_t size)
+        : data_(static_cast<const uint8_t*>(data)), size_(size) {
+        if (!data_ && size_)
+            throw std::runtime_error("video input data is required");
+    }
+
+    bool VideoSource::read(uint64_t offset, uint64_t size, uint8_t* out) {
+        if (offset > size_ || size > size_ - offset)
+            return false;
+        if (!size)
+            return true;
+        if (data_) {
+            std::memcpy(out, data_ + offset, size_t(size));
+            return true;
+        }
+        file_.clear();
+        file_.seekg(std::streamoff(offset));
+        return bool(file_.read(reinterpret_cast<char*>(out), std::streamsize(size)));
+    }
+
+    VideoReadResult load_video(VideoSource& source, size_t max_frames, int64_t fps_num, int64_t fps_den, bool include_audio) {
         uint8_t header[12]{};
-        if (!file || !file.read(reinterpret_cast<char*>(header), sizeof(header)))
+        if (!source.read(0, sizeof(header), header))
             throw std::runtime_error("cannot read video input header");
         if (!std::memcmp(header, "RIFF", 4)) {
             if (!std::memcmp(header + 8, "AVI ", 4))
-                return load_avi(path, max_frames, fps_num, fps_den, include_audio);
+                return load_avi(source, max_frames, fps_num, fps_den, include_audio);
             if (!std::memcmp(header + 8, "WEBP", 4))
-                return load_webp(path, max_frames, fps_num, fps_den);
+                return load_webp(source, max_frames, fps_num, fps_den);
         }
         if (header[0] == 0x1a && header[1] == 0x45 && header[2] == 0xdf && header[3] == 0xa3)
-            return load_webm(path, max_frames, fps_num, fps_den, include_audio);
+            return load_webm(source, max_frames, fps_num, fps_den, include_audio);
         throw std::runtime_error("unsupported video input; expected AVI, WebP or independent-frame VP8 WebM");
+    }
+
+    VideoReadResult load_video(const std::filesystem::path& path, size_t max_frames, int64_t fps_num, int64_t fps_den, bool include_audio) {
+        VideoSource source(path);
+        return load_video(source, max_frames, fps_num, fps_den, include_audio);
     }
 
     static uint32_t fourcc(const char* text) {
@@ -64,26 +94,23 @@ namespace sd::dgl::ops {
     };
 
     class AVIReader {
-        std::ifstream file_;
-        uint64_t size_;
+        VideoSource& source_;
         size_t chunks_ = 0;
 
     public:
-        explicit AVIReader(const std::filesystem::path& path)
-            : file_(path, std::ios::binary | std::ios::ate) {
-            if (!file_ || file_.tellg() < 12)
+        explicit AVIReader(VideoSource& source)
+            : source_(source) {
+            if (source_.size() < 12)
                 throw std::runtime_error("cannot read AVI file");
-            size_ = uint64_t(file_.tellg());
         }
 
-        uint64_t size() const { return size_; }
+        uint64_t size() const { return source_.size(); }
 
         std::vector<uint8_t> read(uint64_t offset, uint64_t size) {
-            if (offset > size_ || size > size_ - offset || size > 256 * 1024 * 1024)
+            if (offset > this->size() || size > this->size() - offset || size > 256 * 1024 * 1024)
                 throw std::runtime_error("invalid AVI data size");
             std::vector<uint8_t> bytes(size_t(size), 0);
-            file_.seekg(std::streamoff(offset));
-            if (size && !file_.read(reinterpret_cast<char*>(bytes.data()), std::streamsize(size)))
+            if (!source_.read(offset, size, bytes.data()))
                 throw std::runtime_error("truncated AVI file");
             return bytes;
         }
@@ -213,10 +240,8 @@ namespace sd::dgl::ops {
         }
     }
 
-    VideoReadResult load_avi(const std::filesystem::path& path, size_t max_frames, int64_t fps_num, int64_t fps_den, bool include_audio) {
-        if (!std::filesystem::is_regular_file(path))
-            throw std::runtime_error("video path is not a regular file");
-        AVIReader reader(path);
+    VideoReadResult load_avi(VideoSource& source, size_t max_frames, int64_t fps_num, int64_t fps_den, bool include_audio) {
+        AVIReader reader(source);
         auto root = reader.read(0, 12);
         if (read_u32(root.data()) != fourcc("RIFF") || read_u32(root.data() + 8) != fourcc("AVI "))
             throw std::runtime_error("video input supports AVI (RGB or MJPEG) only");

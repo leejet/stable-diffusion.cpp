@@ -222,6 +222,15 @@ whose items also carry sample-rate/FPS metadata. These setters retain all nested
 tensors. Freeing the caller's tensor handles or descriptor arrays does not
 invalidate configured options.
 
+`sd_video_decode(data, size, fps, max_frames, &frames, &samples, &sample_rate)`
+decodes an AVI (RGB or MJPEG), animated WebP or independent-frame VP8 WebM held in
+memory, as DGL `video::load` reads a file. `fps` 0 keeps the source rate, and
+fails when the input has no fixed rate, such as an animated WebP with uneven frame
+durations; `fps` is at most 1000000. `max_frames` 0 keeps every frame. The frames come back as one 4D tensor ready for
+`control_frames`. When `samples` is not NULL and the input has a PCM soundtrack,
+it comes back as an F32 sample tensor with its rate in `sample_rate`. Free both
+with `sd_tensor_free()`.
+
 `sd_result_get_image()` returns a U8 image/frame tensor. `sd_result_get_audio()`
 returns sample-rate metadata and a F32 sample tensor. `sd_result_get_video()`
 returns FPS, optional audio and a contiguous 4D tensor, assembled and cached on

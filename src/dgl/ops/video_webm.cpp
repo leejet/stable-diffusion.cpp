@@ -2,7 +2,6 @@
 
 #include <cmath>
 #include <cstring>
-#include <fstream>
 #include <limits>
 
 #include "dgl/ops/tensor.h"
@@ -14,22 +13,20 @@
 
 namespace sd::dgl::ops {
     class WebMReader : public mkvparser::IMkvReader {
-        std::ifstream file_;
+        VideoSource& source_;
         long long size_;
 
     public:
-        explicit WebMReader(const std::filesystem::path& path)
-            : file_(path, std::ios::binary | std::ios::ate) {
-            if (!file_ || file_.tellg() <= 0)
+        explicit WebMReader(VideoSource& source)
+            : source_(source) {
+            if (!source_.size() || source_.size() > uint64_t(std::numeric_limits<long long>::max()))
                 throw std::runtime_error("cannot read WebM input");
-            size_ = static_cast<long long>(file_.tellg());
+            size_ = static_cast<long long>(source_.size());
         }
         int Read(long long position, long length, unsigned char* buffer) override {
             if (position < 0 || length < 0 || position > size_ || length > size_ - position)
                 return -1;
-            file_.clear();
-            file_.seekg(position);
-            return !length || file_.read(reinterpret_cast<char*>(buffer), length) ? 0 : -1;
+            return source_.read(uint64_t(position), uint64_t(length), buffer) ? 0 : -1;
         }
         int Length(long long* total, long long* available) override {
             *total = *available = size_;
@@ -50,8 +47,8 @@ namespace sd::dgl::ops {
         long size;
     };
 
-    VideoReadResult load_webm(const std::filesystem::path& path, size_t max_frames, int64_t fps_num, int64_t fps_den, bool include_audio) {
-        WebMReader reader(path);
+    VideoReadResult load_webm(VideoSource& source, size_t max_frames, int64_t fps_num, int64_t fps_den, bool include_audio) {
+        WebMReader reader(source);
         mkvparser::EBMLHeader header;
         long long position = 0;
         if (header.Parse(&reader, position) || !header.m_docType ||
@@ -198,7 +195,7 @@ namespace sd::dgl::ops {
 }
 #else
 namespace sd::dgl::ops {
-    VideoReadResult load_webm(const std::filesystem::path&, size_t, int64_t, int64_t, bool) {
+    VideoReadResult load_webm(VideoSource&, size_t, int64_t, int64_t, bool) {
         throw std::runtime_error("WebM video input requires a build with SD_WEBM=ON");
     }
 }

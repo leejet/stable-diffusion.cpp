@@ -1,7 +1,6 @@
 #include "dgl/ops/video_webp.h"
 
 #include <cstring>
-#include <fstream>
 #include <limits>
 
 #include "dgl/ops/tensor.h"
@@ -11,16 +10,13 @@
 #include <webp/demux.h>
 
 namespace sd::dgl::ops {
-    VideoReadResult load_webp(const std::filesystem::path& path, size_t max_frames, int64_t fps_num, int64_t fps_den) {
-        std::ifstream file(path, std::ios::binary | std::ios::ate);
-        if (!file || file.tellg() <= 0)
+    VideoReadResult load_webp(VideoSource& source, size_t max_frames, int64_t fps_num, int64_t fps_den) {
+        if (!source.size())
             throw std::runtime_error("cannot read WebP input");
-        const auto length = uint64_t(file.tellg());
-        if (length > std::numeric_limits<size_t>::max() || length > uint64_t(std::numeric_limits<std::streamsize>::max()))
+        if (source.size() > std::numeric_limits<size_t>::max())
             throw std::runtime_error("WebP input is too large");
-        std::vector<uint8_t> bytes(size_t(length), 0);
-        file.seekg(0);
-        if (!file.read(reinterpret_cast<char*>(bytes.data()), std::streamsize(bytes.size())))
+        std::vector<uint8_t> bytes(size_t(source.size()), 0);
+        if (!source.read(0, bytes.size(), bytes.data()))
             throw std::runtime_error("truncated WebP input");
         WebPBitstreamFeatures features{};
         if (WebPGetFeatures(bytes.data(), bytes.size(), &features) != VP8_STATUS_OK ||
@@ -90,7 +86,7 @@ namespace sd::dgl::ops {
 }
 #else
 namespace sd::dgl::ops {
-    VideoReadResult load_webp(const std::filesystem::path&, size_t, int64_t, int64_t) {
+    VideoReadResult load_webp(VideoSource&, size_t, int64_t, int64_t) {
         throw std::runtime_error("WebP video input requires a build with SD_WEBP=ON");
     }
 }

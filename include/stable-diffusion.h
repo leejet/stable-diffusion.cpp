@@ -147,6 +147,20 @@ SD_API const void* sd_tensor_data(const sd_tensor_t* tensor);
 // Failures use sd_get_last_error().
 SD_API bool sd_tensor_save(const sd_tensor_t* tensor, const char* path);
 
+// Decodes an AVI (RGB or MJPEG), animated WebP or independent-frame VP8 WebM held in
+// memory, as the DGL video::load operation reads a file. fps is at most 1000000; 0 keeps
+// the source frame rate and fails when the input has no fixed rate. max_frames 0 keeps
+// every frame. frames_out receives U8 [3,W,H,T]. With samples_out, a PCM soundtrack is
+// returned as F32 [C,N] with its rate in *sample_rate_out, or NULL when the input has none.
+// Free returned tensors with sd_tensor_free. Failures use sd_get_last_error().
+SD_API sd_status_t sd_video_decode(const void* data,
+                                   size_t size,
+                                   int fps,
+                                   size_t max_frames,
+                                   sd_tensor_t** frames_out,
+                                   sd_tensor_t** samples_out,
+                                   uint32_t* sample_rate_out);
+
 // Options
 
 typedef struct {

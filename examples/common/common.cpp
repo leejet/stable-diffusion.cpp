@@ -1732,6 +1732,56 @@ bool decode_base64_image(const std::string& encoded_input,
     return true;
 }
 
+/** Decodes a base64 AVI, animated WebP or VP8 WebM into frames that share one decoded tensor. */
+static bool decode_base64_video(const std::string& encoded_input,
+                                int fps,
+                                size_t max_frames,
+                                std::vector<SDImageOwner>& out_frames,
+                                SDAudioOwner* out_audio) {
+    std::string encoded = encoded_input;
+    auto comma_pos      = encoded.find(',');
+    if (comma_pos != std::string::npos) {
+        encoded = encoded.substr(comma_pos + 1);
+    }
+    std::vector<uint8_t> video_bytes = decode_base64_bytes(encoded);
+    if (video_bytes.empty()) {
+        return false;
+    }
+
+    sd_tensor_t* raw_frames  = nullptr;
+    sd_tensor_t* raw_samples = nullptr;
+    uint32_t sample_rate     = 0;
+    if (sd_video_decode(video_bytes.data(), video_bytes.size(), fps, max_frames, &raw_frames,
+                        out_audio ? &raw_samples : nullptr, &sample_rate) != SD_STATUS_OK) {
+        LOG_ERROR("cannot decode video input: %s", sd_get_last_error());
+        return false;
+    }
+    SDTensorPtr frames(raw_frames);
+    SDTensorPtr samples(raw_samples);
+
+    const auto channels     = uint32_t(sd_tensor_dim(frames.get(), 0));
+    const auto width        = uint32_t(sd_tensor_dim(frames.get(), 1));
+    const auto height       = uint32_t(sd_tensor_dim(frames.get(), 2));
+    const auto count        = size_t(sd_tensor_dim(frames.get(), 3));
+    const size_t frame_size = size_t(channels) * width * height;
+    auto* pixels            = const_cast<uint8_t*>(static_cast<const uint8_t*>(sd_tensor_data(frames.get())));
+    out_frames.clear();
+    out_frames.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        out_frames.emplace_back(SDImage{width, height, channels, pixels + i * frame_size, sd_tensor_retain(frames.get())});
+    }
+
+    if (out_audio) {
+        out_audio->reset();
+        if (samples) {
+            const auto* data = static_cast<const float*>(sd_tensor_data(samples.get()));
+            std::vector<float> values(data, data + sd_tensor_byte_size(samples.get()) / sizeof(float));
+            out_audio->reset(std::move(values), sample_rate, uint32_t(sd_tensor_dim(samples.get(), 0)));
+        }
+    }
+    return true;
+}
+
 static bool parse_image_json_field(const json& parent,
                                    const char* key,
                                    int channels,
@@ -1821,27 +1871,43 @@ static bool parse_audio_array_json_field(const json& parent,
     return true;
 }
 
-/** Parses a JSON array of per-video base64 frame arrays into owned videos. */
+/**
+ * Parses a JSON array of reference videos, each a base64 frame array or a base64 video file,
+ * into owned videos. A file's soundtrack goes to out_audios at the video's index; it is not
+ * decoded for the first explicit_audios videos, whose audio comes from ref_video_audios.
+ */
 static bool parse_video_array_json_field(const json& parent,
                                          const char* key,
-                                         std::vector<std::vector<SDImageOwner>>& out_videos) {
+                                         size_t explicit_audios,
+                                         std::vector<std::vector<SDImageOwner>>& out_videos,
+                                         std::vector<SDAudioOwner>& out_audios) {
     if (!parent.contains(key)) {
         return true;
     }
+    out_videos.clear();
+    out_audios.clear();
     if (parent.at(key).is_null()) {
-        out_videos.clear();
         return true;
     }
     if (!parent.at(key).is_array()) {
         return false;
     }
 
-    out_videos.clear();
     for (const auto& video : parent.at(key)) {
+        std::vector<SDImageOwner> frames;
+        SDAudioOwner audio;
+        if (video.is_string()) {
+            const bool explicit_audio = out_videos.size() < explicit_audios;
+            if (!decode_base64_video(video.get<std::string>(), 24, 0, frames, explicit_audio ? nullptr : &audio)) {
+                return false;
+            }
+            out_videos.push_back(std::move(frames));
+            out_audios.push_back(std::move(audio));
+            continue;
+        }
         if (!video.is_array() || video.empty()) {
             return false;
         }
-        std::vector<SDImageOwner> frames;
         for (const auto& frame : video) {
             if (!frame.is_string()) {
                 return false;
@@ -1853,6 +1919,7 @@ static bool parse_video_array_json_field(const json& parent,
             frames.push_back(std::move(image));
         }
         out_videos.push_back(std::move(frames));
+        out_audios.push_back(std::move(audio));
     }
     return true;
 }
@@ -2140,9 +2207,17 @@ bool SDGenerationParams::from_json_str(
         !parse_image_array_json_field(j, "control_frames", 3, control_frames) ||
         !parse_audio_array_json_field(j, "ref_audios", ref_audios) ||
         !parse_audio_array_json_field(j, "ref_video_audios", ref_video_audios) ||
-        !parse_video_array_json_field(j, "ref_videos", ref_videos)) {
+        !parse_video_array_json_field(j, "ref_videos", ref_video_audios.size(), ref_videos, ref_video_file_audios)) {
         LOG_ERROR("invalid input image/audio/video array");
         return false;
+    }
+    if (j.contains("control_video") && !j.at("control_video").is_null()) {
+        if (!j.at("control_video").is_string() ||
+            !decode_base64_video(j.at("control_video").get<std::string>(), fps.value_or(16),
+                                 size_t(std::max(video_frames.value_or(0), 0)), control_frames, nullptr)) {
+            LOG_ERROR("invalid control_video");
+            return false;
+        }
     }
 
     return true;
@@ -2599,7 +2674,9 @@ SDOptPtr SDGenerationParams::to_video_opt() {
         for (auto& frame : ref_videos[i]) {
             frame_views.push_back(frame.get());
         }
-        SDAudio audio = i < ref_video_audios.size() ? ref_video_audios[i].get() : SDAudio{};
+        SDAudio audio = i < ref_video_audios.size()        ? ref_video_audios[i].get()
+                        : i < ref_video_file_audios.size() ? ref_video_file_audios[i].get()
+                                                           : SDAudio{};
         ref_video_views.push_back({frame_views.empty() ? nullptr : frame_views.data(),
                                    static_cast<int>(frame_views.size()),
                                    24,
