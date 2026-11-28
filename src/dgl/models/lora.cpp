@@ -8,6 +8,24 @@
 
 namespace sd::dgl::models {
 
+#ifndef SD_USE_UPSTREAM_GGML
+    // Merging a LoRA into a weight that isn't F32 or F16 adds in F32 and writes the sum back with a CPY to the
+    // weight's type. Not every backend has that CPY for fp8 (Vulkan has none).
+    static bool supports_writeback(ggml_backend_t backend, ggml_type type) {
+        if (!backend)
+            return false;
+        ggml_init_params params = {ggml_tensor_overhead() * 4, nullptr, true};
+        ggml_context* ctx       = ggml_init(params);
+        if (!ctx)
+            return false;
+        ggml_tensor* sum     = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 256);
+        ggml_tensor* weight  = ggml_new_tensor_1d(ctx, type, 256);
+        const bool supported = ggml_backend_supports_op(backend, ggml_cpy(ctx, sum, weight));
+        ggml_free(ctx);
+        return supported;
+    }
+#endif
+
     lora_apply_mode_t resolve_lora_mode(lora_apply_mode_t mode, const ModelLoader& loader, SDBackendManager& backends, SDBackendModule module, bool row_split) {
         if (mode != LORA_APPLY_AUTO)
             return mode;
@@ -16,9 +34,19 @@ namespace sd::dgl::models {
             backends.params_backend(module) != backends.runtime_backend(module))
             return LORA_APPLY_AT_RUNTIME;
 
-        const auto& tensors  = loader.get_tensor_storage_map();
-        const bool quantized = std::any_of(tensors.begin(), tensors.end(), [](const auto& entry) {
+        const auto& tensors = loader.get_tensor_storage_map();
+#ifndef SD_USE_UPSTREAM_GGML
+        const bool e4m3_writeback = supports_writeback(backends.runtime_backend(module), GGML_TYPE_F8_E4M3);
+#endif
+        const bool quantized = std::any_of(tensors.begin(), tensors.end(), [&](const auto& entry) {
             const auto& tensor = entry.second;
+#ifndef SD_USE_UPSTREAM_GGML
+            // fp8 weights merge only where the backend can write F32 back to them: E4M3 where it has that CPY,
+            // E5M2 never. (Upstream ggml loads fp8 as F16, so this doesn't arise there.)
+            const ggml_type type = tensor.expected_type < GGML_TYPE_COUNT ? tensor.expected_type : tensor.type;
+            if (type == GGML_TYPE_F8_E5M2 || (type == GGML_TYPE_F8_E4M3 && !e4m3_writeback))
+                return true;
+#endif
             return tensor.w4_convrot_kind ||
                    (!tensor.is_int8_tensorwise &&
                     (ggml_is_quantized(tensor.type) ||
