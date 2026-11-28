@@ -49,22 +49,26 @@ namespace KandinskyImageSR {
     bool probe_bundle(const ModelLoader& loader) {
         try {
             const auto config = read_bundle_config(loader);
-            // Build only tensor descriptors so discovery checks the same transformer layout as inference.
+            // Check both networks against the checkpoint headers without allocating weight buffers.
             std::unique_ptr<ggml_context, decltype(&ggml_free)> ctx(
                 ggml_init({MAX_PARAMS_TENSOR_NUM * ggml_tensor_overhead(), nullptr, true}), ggml_free);
             if (!ctx)
                 return false;
+            const auto& tensors          = loader.get_tensor_storage_map();
+            const std::string vae_prefix = "first_stage_model";
             Transformer model(config.transformer);
             model.init(ctx.get());
+            AutoEncoderKLModel vae(VERSION_FLUX, false, false, false, tensors, vae_prefix);
+            vae.init(ctx.get(), tensors, vae_prefix);
             std::map<std::string, ggml_tensor*> expected;
             model.get_param_tensors(expected);
-            const auto& tensors = loader.get_tensor_storage_map();
+            vae.get_param_tensors(expected, vae_prefix);
             for (const auto& [name, tensor] : expected) {
                 const auto it = tensors.find(name);
                 if (it == tensors.end() || !std::equal(std::begin(tensor->ne), std::end(tensor->ne), it->second.ne))
                     return false;
             }
-            return tensors.count("first_stage_model.encoder.conv_in.weight") != 0;
+            return true;
         } catch (const std::exception& e) {
             LOG_DEBUG("invalid Kandinsky ImageSR bundle: %s", e.what());
             return false;
