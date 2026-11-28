@@ -24,7 +24,11 @@ layout(push_constant) uniform Parameters {
 }
 p;
 
-#ifdef Q8_0
+#if defined(Q8_0) || defined(QUANT_BITS)
+#define ROTATE_WEIGHTS
+#endif
+
+#ifdef ROTATE_WEIGHTS
 layout(binding = 0, std430) readonly buffer Source {
 #ifdef Q8_HALFWORDS
     uint16_t source_halfwords[];
@@ -48,6 +52,14 @@ shared float maxima[gl_WorkGroupSize.x / 32];
 shared float maxima[gl_WorkGroupSize.x];
 #endif
 
+#if defined(ROTATE_WEIGHTS) && !defined(Q8_HALFWORDS)
+uint load_u32(uint byte_offset) {
+    const uint index = byte_offset / 4;
+    const uint word  = source_words[index];
+    return (byte_offset & 2) == 0 ? word : (word >> 16) | (source_words[index + 1] << 16);
+}
+#endif
+
 #ifdef Q8_0
 ivec4 load_q8(const uint row, const uint word, out float scale) {
     // Each GGML block stores a half scale followed by 32 signed bytes.
@@ -60,11 +72,7 @@ ivec4 load_q8(const uint row, const uint word, out float scale) {
 #else
     const uint block_byte = block * 34;
     const uint scale_bits = source_words[block_byte / 4] >> ((block_byte & 2) * 8);
-    const uint value_byte = block_byte + 2 + (word % 8) * 4;
-    uint values           = source_words[value_byte / 4];
-    if ((value_byte & 2) != 0) {
-        values = (values >> 16) | (source_words[value_byte / 4 + 1] << 16);
-    }
+    const uint values     = load_u32(block_byte + 2 + (word % 8) * 4);
 #endif
     scale           = unpackHalf2x16(scale_bits).x;
     const int bytes = int(values);
@@ -78,12 +86,32 @@ vec4 load_values(const uint row, const uint word) {
     float scale;
     const ivec4 values = load_q8(row, word, scale);
     return scale * vec4(values);
+#elif defined(QUANT_BITS)
+    const uint param_bytes = QUANT_AFFINE == 1 ? 4u : 2u;
+    const uint high_bytes  = QUANT_BITS == 5 ? 4u : 0u;
+    const uint block_bytes = param_bytes + high_bytes + 16u;
+    const uint block_byte  = (row * (p.words_per_row / 8) + word / 8) * block_bytes;
+    const uint block_word  = word % 8;
+    const vec2 params      = unpackHalf2x16(source_words[block_byte / 4] >> ((block_byte & 2) * 8));
+    // The two halves of the block share the same 16 bytes of low nibbles.
+    const uint low    = load_u32(block_byte + param_bytes + high_bytes + (block_word % 4) * 4) >> (4 * (block_word / 4));
+    const uvec4 lanes = uvec4(0, 1, 2, 3);
+    uvec4 values      = (uvec4(low) >> (lanes * 8)) & 15u;
+#if QUANT_BITS == 5
+    const uint high = load_u32(block_byte + param_bytes) >> (block_word * 4);
+    values |= ((uvec4(high) >> lanes) & 1u) << 4;
+#endif
+#if QUANT_AFFINE == 1
+    return params.x * vec4(values) + params.y;
+#else
+    return params.x * vec4(ivec4(values) - (1 << (QUANT_BITS - 1)));
+#endif
 #else
     return source_values[row * p.words_per_row + word];
 #endif
 }
 
-#ifdef Q8_0
+#ifdef ROTATE_WEIGHTS
 vec4 rotate_word(vec4 x) {
     return vec4(x.x + x.y + x.z - x.w, x.x + x.y - x.z + x.w,
                 x.x - x.y + x.z + x.w, -x.x + x.y + x.z + x.w);
@@ -124,7 +152,7 @@ void rotate_subgroup(uint row, uint word, out vec4 lower, out vec4 upper) {
     lower            = rotate_four(a, b, c, d, lane / 16);
     upper            = rotate_four(a, b, c, d, 2 + lane / 16);
 }
-#elif defined(Q8_0)
+#elif defined(ROTATE_WEIGHTS)
 shared vec4 rotation[2][gl_WorkGroupSize.x];
 
 vec4 rotate_group(const uint row, const uint word) {
@@ -168,7 +196,7 @@ void pack_row(const uint row) {
         const vec4 peak = max(abs(lower[slot]), abs(upper[slot]));
         maximum         = max(maximum, max(max(peak.x, peak.y), max(peak.z, peak.w)));
     }
-#elif defined(Q8_0)
+#elif defined(ROTATE_WEIGHTS)
     for (uint first = 0; first < p.words_per_row; first += gl_WorkGroupSize.x) {
         const vec4 values = abs(rotate_group(row, first + tid));
         maximum           = max(maximum, max(max(values.x, values.y), max(values.z, values.w)));
@@ -207,7 +235,7 @@ void pack_row(const uint row) {
     if (tid == 0) {
         packed[p.scale_offset + row] = floatBitsToUint(scale);
     }
-#ifdef Q8_0
+#ifdef ROTATE_WEIGHTS
     const float inverse = maxima[0] == 0.0 ? 0.0 : 127.0 / maxima[0];
 #else
     const float inverse = scale == 0.0 ? 0.0 : 1.0 / scale;
@@ -223,7 +251,7 @@ void pack_row(const uint row) {
         pack_word(row, word + 32, upper[slot], inverse);
     }
 #else
-#ifdef Q8_0
+#ifdef ROTATE_WEIGHTS
     for (uint first = 0; first < p.words_per_row; first += gl_WorkGroupSize.x) {
         const uint word   = first + tid;
         const vec4 values = rotate_group(row, word);

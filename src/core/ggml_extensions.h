@@ -48,7 +48,26 @@ struct SDI8Operation {
 bool sd_ggml_valid_convrot_group(int group);
 
 ggml_ext_op_t sd_ggml_i8_op();
-ggml_ext_op_t sd_ggml_requantize_q8_op();
+ggml_ext_op_t sd_ggml_requantize_i8_op();
+
+constexpr int SD_REQUANTIZE_I8_BLOCK_SIZE = 32;
+
+constexpr size_t sd_ggml_requantize_i8_block_bytes(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q4_0:
+            return 18;
+        case GGML_TYPE_Q4_1:
+            return 20;
+        case GGML_TYPE_Q5_0:
+            return 22;
+        case GGML_TYPE_Q5_1:
+            return 24;
+        case GGML_TYPE_Q8_0:
+            return 34;
+        default:
+            return 0;
+    }
+}
 
 ggml_ext_op_t sd_ggml_convrot_op();
 

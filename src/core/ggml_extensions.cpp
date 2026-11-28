@@ -252,10 +252,13 @@ static bool i8_infer(ggml_tensor* const* inputs, int count, const void* attribut
     return true;
 }
 
-static bool requantize_q8_infer(ggml_tensor* const* inputs, int count, const void*, ggml_ext_tensor_desc* output) {
-    if (count != 2 || !inputs[0] || !inputs[1] || inputs[0]->type != GGML_TYPE_Q8_0 || inputs[1]->type != GGML_TYPE_I8)
+static bool requantize_i8_infer(ggml_tensor* const* inputs, int count, const void*, ggml_ext_tensor_desc* output) {
+    if (count != 2 || !inputs[0] || !inputs[1] || inputs[1]->type != GGML_TYPE_I8)
         return false;
-    const auto* weight = inputs[0];
+    const auto* weight       = inputs[0];
+    const size_t block_bytes = sd_ggml_requantize_i8_block_bytes(weight->type);
+    if (!block_bytes || ggml_blck_size(weight->type) != SD_REQUANTIZE_I8_BLOCK_SIZE || ggml_type_size(weight->type) != block_bytes)
+        return false;
     const int64_t k = weight->ne[0], n = weight->ne[1];
     constexpr int64_t scale_bytes = sizeof(float);
     int group;
@@ -290,9 +293,9 @@ ggml_ext_op_t sd_ggml_i8_op() {
     return op;
 }
 
-ggml_ext_op_t sd_ggml_requantize_q8_op() {
+ggml_ext_op_t sd_ggml_requantize_i8_op() {
     static const auto op = [] {
-        const ggml_ext_op_desc desc = {GGML_EXT_ABI_VERSION, "sd.requantize_q8.v1", 0, requantize_q8_infer};
+        const ggml_ext_op_desc desc = {GGML_EXT_ABI_VERSION, "sd.requantize_i8.v1", 0, requantize_i8_infer};
         const auto result           = ggml_ext_register_op(&desc);
         GGML_ASSERT(result);
         return result;
