@@ -16,8 +16,8 @@ sd_status_t sd_video_decode(const void* data,
     if (sample_rate_out)
         *sample_rate_out = 0;
     return sd::api::call([&] {
-        if (!data || !size || !frames_out || fps < 0)
-            return sd::api::error(SD_STATUS_INVALID_ARGUMENT, nullptr, "data, size and frames_out are required, and fps must not be negative");
+        if (!data || !size || !frames_out || fps < 0 || fps > 1000000)
+            return sd::api::error(SD_STATUS_INVALID_ARGUMENT, nullptr, "data, size and frames_out are required, and fps must be 0 to 1000000");
         sd::dgl::ops::VideoSource source(data, size);
         auto video = sd::dgl::ops::load_video(source, max_frames, fps, 1, samples_out != nullptr);
         if (samples_out && video.audio.samples) {

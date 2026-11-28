@@ -224,8 +224,9 @@ invalidate configured options.
 
 `sd_video_decode(data, size, fps, max_frames, &frames, &samples, &sample_rate)`
 decodes an AVI (RGB or MJPEG), animated WebP or independent-frame VP8 WebM held in
-memory, as DGL `video::load` reads a file. `fps` 0 keeps the source rate and
-`max_frames` 0 keeps every frame. The frames come back as one 4D tensor ready for
+memory, as DGL `video::load` reads a file. `fps` 0 keeps the source rate, and
+fails when the input has no fixed rate, such as an animated WebP with uneven frame
+durations; `fps` is at most 1000000. `max_frames` 0 keeps every frame. The frames come back as one 4D tensor ready for
 `control_frames`. When `samples` is not NULL and the input has a PCM soundtrack,
 it comes back as an F32 sample tensor with its rate in `sample_rate`. Free both
 with `sd_tensor_free()`.
