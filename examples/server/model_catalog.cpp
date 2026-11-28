@@ -420,11 +420,11 @@ json resolve_recipe_features(const json& recipe) {
 json model_generation_features(const ServerRuntime& runtime) {
     const auto& recipe = runtime.models->current_recipe;
     if (!recipe.is_null()) {
-        auto features = recipe.at("effective_features");
+        auto features          = recipe.at("effective_features");
+        const auto& context    = *runtime.ctx_params;
+        features["high_noise"] = features.at("high_noise").get<bool>() && !context.high_noise_diffusion_model_path.empty();
         if (recipe.value("source", "") != "command_line") {
-            const auto& context          = *runtime.ctx_params;
             features["controlnet"]       = features.at("controlnet").get<bool>() && !context.control_net_path.empty();
-            features["high_noise"]       = features.at("high_noise").get<bool>() && !context.high_noise_diffusion_model_path.empty();
             features["preview_tae"]      = features.at("preview_tae").get<bool>() && !context.taesd_path.empty();
             features["ref_audios"]       = features.at("ref_audios").get<bool>() && (!context.audio_vae_path.empty() || !context.audio_encoder_path.empty());
             features["ref_video_audios"] = features.at("ref_video_audios").get<bool>() && !context.audio_vae_path.empty();

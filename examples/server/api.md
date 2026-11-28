@@ -212,8 +212,9 @@ along with its generation mode and defaults. With no configured model, those
 features are false.
 The UI uses the selected catalog recipe's `effective_features` and component
 selection for requests that specify `model`.
-Known high-noise sampling settings and `moe_boundary` are ignored when no
-high-noise stage is loaded, and `vace_strength` is ignored by non-VACE models.
+High-noise steps and `moe_boundary` apply only when a high-noise stage is loaded.
+The shared scheduler and flow-shift aliases still apply to single-stage models.
+`vace_strength` applies only to VACE models.
 Actual control-frame inputs still require VACE.
 
 These declarations govern the Web UI and advertised capabilities, not API
@@ -984,6 +985,8 @@ LTX and Wan preserve causal state between temporal tiles. Hunyuan Video and TAEH
 
 `vid_gen`-specific default fields:
 
+High-noise defaults are included when the configured model has a high-noise stage.
+
 | Field | Type |
 | --- | --- |
 | `video_frames` | `integer` |
@@ -991,19 +994,9 @@ LTX and Wan preserve causal state between temporal tiles. Hunyuan Video and TAEH
 | `moe_boundary` | `number` |
 | `vace_strength` | `number` |
 | `high_noise_sample_params` | `object` |
-| `high_noise_sample_params.scheduler` | `string` |
-| `high_noise_sample_params.sample_method` | `string` |
-| `high_noise_sample_params.sample_steps` | `integer` |
-| `high_noise_sample_params.eta` | `number \| null` |
-| `high_noise_sample_params.shifted_timestep` | `integer` |
+| `high_noise_sample_params.scheduler` | `string \| null` |
+| `high_noise_sample_params.sample_steps` | `integer \| null` |
 | `high_noise_sample_params.flow_shift` | `number \| null` |
-| `high_noise_sample_params.guidance.txt_cfg` | `number` |
-| `high_noise_sample_params.guidance.img_cfg` | `number \| null` |
-| `high_noise_sample_params.guidance.distilled_guidance` | `number` |
-| `high_noise_sample_params.guidance.slg.layers` | `array<integer>` |
-| `high_noise_sample_params.guidance.slg.layer_start` | `number` |
-| `high_noise_sample_params.guidance.slg.layer_end` | `number` |
-| `high_noise_sample_params.guidance.slg.scale` | `number` |
 
 Fields returned in `features_by_mode.img_gen`:
 
@@ -1463,40 +1456,17 @@ Example:
     "sample_method": "euler",
     "sample_steps": 28,
     "eta": 1.0,
-    "shifted_timestep": 0,
     "custom_sigmas": [],
     "flow_shift": 0.0,
     "guidance": {
       "txt_cfg": 7.0,
       "img_cfg": 7.0,
-      "distilled_guidance": 3.5,
-      "slg": {
-        "layers": [7, 8, 9],
-        "layer_start": 0.01,
-        "layer_end": 0.2,
-        "scale": 0.0
-      }
+      "distilled_guidance": 3.5
     }
   },
 
   "high_noise_sample_params": {
-    "scheduler": "discrete",
-    "sample_method": "euler",
-    "sample_steps": -1,
-    "eta": 1.0,
-    "shifted_timestep": 0,
-    "flow_shift": 0.0,
-    "guidance": {
-      "txt_cfg": 7.0,
-      "img_cfg": 7.0,
-      "distilled_guidance": 3.5,
-      "slg": {
-        "layers": [7, 8, 9],
-        "layer_start": 0.01,
-        "layer_end": 0.2,
-        "scale": 0.0
-      }
-    }
+    "sample_steps": -1
   },
 
   "lora": [],
@@ -1611,41 +1581,29 @@ Sampling fields:
 | `sample_params.sample_method` | `string` |
 | `sample_params.sample_steps` | `integer` |
 | `sample_params.eta` | `number` |
-| `sample_params.shifted_timestep` | `integer` |
 | `sample_params.custom_sigmas` | `array<number>` |
 | `sample_params.flow_shift` | `number` |
 | `sample_params.guidance.txt_cfg` | `number` |
 | `sample_params.guidance.img_cfg` | `number` |
 | `sample_params.guidance.distilled_guidance` | `number` |
-| `sample_params.guidance.slg.layers` | `array<integer>` |
-| `sample_params.guidance.slg.layer_start` | `number` |
-| `sample_params.guidance.slg.layer_end` | `number` |
-| `sample_params.guidance.slg.scale` | `number` |
 
 High-noise sampling fields:
 
-The two video stages share the scheduler, flow shift and timestep shifting.
-`high_noise_sample_params.scheduler`, `.flow_shift` and `.shifted_timestep`
-are accepted as aliases for those shared settings in video requests. Image
-requests ignore these high-noise fields. Within one video request, a
-corresponding `sample_params` field takes precedence. Request aliases override
-inherited startup and recipe values; `null` clears the inherited shared setting.
+The two native video stages share the scheduler, flow shift, sampler, eta and
+guidance. `high_noise_sample_params.scheduler` and `.flow_shift` are accepted
+as aliases for the shared settings. A corresponding `sample_params` field takes
+precedence. Request aliases override inherited startup and recipe values, and
+`null` clears the inherited shared setting.
+
+The server accepts legacy `high_noise_sample_params.sample_method`, `.eta` and
+`.guidance` fields for compatibility. Set these shared values in `sample_params`.
+Independent stage settings and timestep shifting require an explicit DGL workflow.
 
 | Field | Type |
 | --- | --- |
 | `high_noise_sample_params.scheduler` | `string` |
-| `high_noise_sample_params.sample_method` | `string` |
 | `high_noise_sample_params.sample_steps` | `integer` |
-| `high_noise_sample_params.eta` | `number` |
-| `high_noise_sample_params.shifted_timestep` | `integer` |
 | `high_noise_sample_params.flow_shift` | `number` |
-| `high_noise_sample_params.guidance.txt_cfg` | `number` |
-| `high_noise_sample_params.guidance.img_cfg` | `number` |
-| `high_noise_sample_params.guidance.distilled_guidance` | `number` |
-| `high_noise_sample_params.guidance.slg.layers` | `array<integer>` |
-| `high_noise_sample_params.guidance.slg.layer_start` | `number` |
-| `high_noise_sample_params.guidance.slg.layer_end` | `number` |
-| `high_noise_sample_params.guidance.slg.scale` | `number` |
 
 Other native fields:
 
@@ -1720,10 +1678,7 @@ When omitted, backend defaults apply to these fields:
 - `sample_params.flow_shift`
 - `sample_params.guidance.img_cfg`
 - `high_noise_sample_params.scheduler`
-- `high_noise_sample_params.sample_method`
-- `high_noise_sample_params.eta`
 - `high_noise_sample_params.flow_shift`
-- `high_noise_sample_params.guidance.img_cfg`
 
 `high_noise_sample_params` may also be omitted entirely.
 
