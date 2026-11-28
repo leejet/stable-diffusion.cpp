@@ -1,0 +1,181 @@
+# version: 0.0.0
+# docs/models/minimax_h3.md — AV continuation: chain segment B onto segment A's
+# tail latent (video head and audio head pinned as never-denoised), seamless
+# multi-part video without pixel-frame anchoring drift.
+#
+# The overlap is ONE time interval, `overlap_frames` pixel frames of A's tail.
+# Video and audio latent counts are both derived from it, so the streams stay
+# aligned for any `frames`. To join A and B: decode B, then drop its first
+# `overlap_frames` pixel frames of video and the matching overlap duration of
+# audio before concatenating (see the join note in main() below — the pinned
+# latents land at different positions within Sol-H3's five-latent decoder
+# blocks than they occupied in A, so trimming is what makes the seam clean).
+
+var {
+    model_path = "../models/diffusion_models/minimax_h3_fl2va-Q4_K_M.gguf"
+    text_path = "../models/text_encoders/qwen3vl_32b_minimax_h3-Q4_K_M.gguf"
+    vae_path = "../models/vae/minimax_h3_video_vae_fp16.safetensors"
+    audio_vae_path = "../models/vae/minimax_h3_audio_vae_fp32.safetensors"
+
+    output_a_path = "continuation-part-a.avi"
+    output_b_path = "continuation-part-b.avi"
+    latent_a_path = "continuation-part-a.npy"
+
+    prompt_a = "A cute American Shorthair silver tabby kitten surfs on a tropical ocean wave, cinematic tracking shot, bright sunlight. Upbeat tropical surf-rock background music with cheerful drums and guitar."
+    prompt_b = "The same kitten rides the wave toward the beach at sunset, spray in golden light, smooth motion. The surf-rock music continues seamlessly."
+
+    seed = 42
+    rng_type = "cpu"
+    width = 864
+    height = 480
+    frames = 56
+    fps = 24
+
+    steps = 20
+    method = "euler"
+    scheduler = "discrete"
+    audio_scale = 4
+
+    # Pixel frames of segment A's tail carried into segment B's head — the
+    # single time interval both pinned latent counts derive from. 0 means no
+    # pinning: B degrades to a plain continuation. main() caps the derived
+    # counts so B always keeps at least half of its latents to generate.
+    # Default 12 frames at 24 fps = 0.5 s = 4 video latents (17-frame blocks,
+    # 5 latents each) = 20 audio latents (40 per second).
+    overlap_frames = 12
+}
+
+fn pack_av(video, audio, audio_scale) {
+    shape = tensor::shape(video)
+    count = tensor::numel(audio)
+    tail_channels = math::ceil_div(count, shape[0] * shape[1] * shape[2])
+    tail_shape = [shape[0], shape[1], shape[2], tail_channels, 1]
+    flat = tensor::reshape(tensor::mul(audio, audio_scale), [count])
+    padded = tensor::pad(flat, [0, math::product(tail_shape) - count])
+    return tensor::concat([video, tensor::reshape(padded, tail_shape)], axis = 3)
+}
+
+fn unpack_audio(packed, channels, audio_shape, audio_scale) {
+    tail = packed[:, :, :, channels:]
+    flat = tensor::reshape(tail, [tensor::numel(tail)])
+    return tensor::div(tensor::reshape(flat[:math::product(audio_shape)], audio_shape), audio_scale)
+}
+
+# Fold an audio-space pattern [T, 2, 32, 1] into the packed latent's tail
+# channels exactly the way pack_av folds audio content, so mask zeros land on
+# the same flat positions as the pinned audio frames.
+fn audio_pattern_to_tail(audio_pattern, video_shape_tensor) {
+    count = tensor::numel(audio_pattern)
+    shape = tensor::shape(video_shape_tensor)
+    tail_channels = math::ceil_div(count, shape[0] * shape[1] * shape[2])
+    tail_shape = [shape[0], shape[1], shape[2], tail_channels, 1]
+    flat = tensor::reshape(audio_pattern, [count])
+    padded = tensor::pad(flat, [0, math::product(tail_shape) - count], value = 1)
+    return tensor::reshape(padded, tail_shape)
+}
+
+fn main() {
+    model = load_dit(model_path, family = "minimax_h3", params_backend = "cpu", backend = "vulkan1")
+    text = load_text_encoder(text_path, family = "minimax_h3", params_backend = "cpu", backend = "vulkan1")
+    # note: on one test machine (Navi10 dGPU, 8 GiB) the VAE graphs device-lost
+    # on the default device; routing them to the iGPU's larger unified pool fixed it
+    vae = load_vae(vae_path, family = "minimax_h3", params_backend = "cpu", backend = "vulkan1")
+    audio_vae = load_audio_vae(audio_vae_path, family = "minimax_h3", params_backend = "cpu", backend = "vulkan1")
+
+    video_base = tensor::zeros(latent_shape(vae, width = width, height = height, frames = frames))
+    audio_zeros = tensor::zeros(audio_latent_shape(audio_vae, frames = frames, fps = fps))
+    c_video = tensor::shape(video_base)[3]
+    t_video = tensor::shape(video_base)[2]
+
+    # ---------- segment A ----------
+    condition_a = encode_prompt(text, prompt_a, width = width, height = height)
+    base_a = pack_av(video_base, audio_zeros, audio_scale = audio_scale)
+    predict_a = predictor(model, condition_a, audio_length = tensor::shape(audio_zeros)[0])
+    sigmas_a = make_sigmas(predict_a, latent = base_a, steps = steps, scheduler = scheduler)
+    rng = make_rng(rng_type, seed = seed)
+    start_a = add_noise(predict_a, base_a, tensor::randn_like(base_a, rng = rng), sigma = sigmas_a[0])
+    latent_a = sample(start_a, sigmas_a, predict = predict_a, method = method, rng = rng)
+
+    # save after sampling completes (the save point is the final latent, so a
+    # later refinement pass would naturally run before this line)
+    tensor::save(latent_a_path, latent_a)
+
+    frames_a = vae_decode(vae, dit_to_vae_latents(vae, latent_a[:, :, :t_video, :c_video]),
+                          tiling = {enabled = true, tile_size_w = 256, tile_size_h = 256})
+    audio_a = audio_vae_decode(audio_vae, unpack_audio(latent_a, channels = c_video, audio_shape = tensor::shape(audio_zeros), audio_scale = audio_scale))
+    video::save(output_a_path, {frames = frames_a, fps_num = fps, fps_den = 1}, audio = audio_a)
+
+    # ---------- segment B: continuation ----------
+    # Sol-H3 timing: video latents come in five-latent/17-frame blocks after
+    # the first (video_frames_to_latent_frames: frames <= 5 -> 2 latents, else
+    # ((frames - 5) / 17) * 5 + 2; decoded_frames(t) = 4t - 3*ceil(t/5)), and
+    # the audio VAE emits 40 latents per second. Both pinned counts derive
+    # from the SAME `overlap_frames` pixel-frame interval, so the video and
+    # audio overlaps always cover the same duration for any `frames`.
+    packed_prev = tensor::load(latent_a_path)
+    video_prev = packed_prev[:, :, :, :c_video]
+    # audio latent is t-major [T, 2, 32, 1]: the tail slice carries whole
+    # streams, so no flat-offset math is needed even for unequal segments
+    audio_prev = unpack_audio(packed_prev, channels = c_video, audio_shape = tensor::shape(audio_zeros), audio_scale = audio_scale)
+    t_audio = tensor::shape(audio_zeros)[0]
+    t_prev = tensor::shape(video_prev)[2]
+    ta_prev = tensor::shape(audio_prev)[0]
+
+    h_req = math::ceil_div(overlap_frames * 5, 17)       # video latents covering the interval
+    n_req = math::ceil_div(overlap_frames * 40, fps)     # audio latents covering the interval
+    # Cap the overlap so B keeps room to continue: never carry more than half
+    # of B's latents on either stream (nor more than A's tail can give).
+    # overlap_frames = 0 leaves h_req = n_req = 0: the slices below go empty,
+    # the mask becomes all-ones, and B is a plain continuation — handled
+    # without special-casing. Positive-index slices are load-bearing here: a
+    # negative-endpoint slice with a zero count would select the WHOLE tail.
+    h_cap = math::min(math::min(h_req, math::ceil_div(t_video, 2)), t_prev)
+    n_cap = math::min(math::min(n_req, math::ceil_div(t_audio, 2)), ta_prev)
+    video_tail_raw = video_prev[:, :, t_prev - h_cap:, :]
+    video_tail = video_tail_raw[:, :, -t_video:, :]
+    audio_tail_raw = audio_prev[ta_prev - n_cap:, :, :, :]
+    audio_tail = audio_tail_raw[-t_audio:, :, :, :]
+    h = tensor::shape(video_tail)[2]
+    n = tensor::shape(audio_tail)[0]
+    video_base_b = tensor::replace_slice(tensor::zeros(tensor::shape(video_base)), video_tail, axis = 2, start = 0)
+    audio_b = tensor::replace_slice(tensor::zeros(tensor::shape(audio_zeros)), audio_tail, axis = 0, start = 0)
+    base_b = pack_av(video_base_b, audio_b, audio_scale = audio_scale)
+
+    # full-width denoise mask over the packed AV latent; zeros pin the carried
+    # heads exactly (per-step restore: denoised * mask + base * (1 - mask)).
+    # Audio zeros are folded with the same tail-channel layout as the content.
+    mask_video = tensor::concat([
+        tensor::full([tensor::shape(video_base)[0], tensor::shape(video_base)[1], h, c_video, 1], 0),
+        tensor::full([tensor::shape(video_base)[0], tensor::shape(video_base)[1], t_video - h, c_video, 1], 1)
+    ], axis = 2)
+    mask_audio_pattern = tensor::concat([
+        tensor::full([n, tensor::shape(audio_zeros)[1], tensor::shape(audio_zeros)[2], tensor::shape(audio_zeros)[3]], 0),
+        tensor::full([t_audio - n, tensor::shape(audio_zeros)[1], tensor::shape(audio_zeros)[2], tensor::shape(audio_zeros)[3]], 1)
+    ], axis = 0)
+    mask_b = tensor::concat([mask_video, audio_pattern_to_tail(mask_audio_pattern, video_base)], axis = 3)
+
+    condition_b = encode_prompt(text, prompt_b, width = width, height = height)
+    predict_b = predictor(model, condition_b, audio_length = tensor::shape(audio_zeros)[0])
+    sigmas_b = make_sigmas(predict_b, latent = base_b, steps = steps, scheduler = scheduler)
+    rng_b = make_rng(rng_type, seed = seed + 1)
+    start_b = add_noise(predict_b, base_b, tensor::randn_like(base_b, rng = rng_b), sigma = sigmas_b[0])
+    latent_b = sample(start_b, sigmas_b, predict = predict_b, method = method, rng = rng_b,
+                      base = base_b, denoise_mask = mask_b, mask_input = true)
+
+    frames_b = vae_decode(vae, dit_to_vae_latents(vae, latent_b[:, :, :t_video, :c_video]),
+                          tiling = {enabled = true, tile_size_w = 256, tile_size_h = 256})
+    audio_b_out = audio_vae_decode(audio_vae, unpack_audio(latent_b, channels = c_video, audio_shape = tensor::shape(audio_zeros), audio_scale = audio_scale))
+    video::save(output_b_path, {frames = frames_b, fps_num = fps, fps_den = 1}, audio = audio_b_out)
+
+    # Join point: decoded_frames(t) = 4t - 3*ceil(t/5) for Sol-H3, so the h
+    # pinned head latents reconstruct covered_video frames of A's tail (>=
+    # overlap_frames). Trim exactly `overlap_frames` from BOTH streams —
+    # B's first overlap_frames pixel frames of video and the matching
+    # overlap_frames/fps seconds of audio — then concatenate A. Both trims
+    # come from the same interval, so the streams stay in sync for any
+    # `frames`. covered_* are the exact reconstructed counts, for checking.
+    covered_video = (4 * t_video - 3 * math::ceil_div(t_video, 5)) - (4 * (t_video - h) - 3 * math::ceil_div(t_video - h, 5))
+    covered_audio = math::ceil_div(n * fps, 40)
+    return {video = {frames = frames_b, fps_num = fps, fps_den = 1}, latent = latent_b, audio = audio_b_out,
+            join = {trim_frames = overlap_frames, covered_video_frames = covered_video, covered_audio_frames = covered_audio}}
+}
