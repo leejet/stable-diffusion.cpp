@@ -19,6 +19,40 @@ static void set_error(std::string* error, const std::string& message) {
     }
 }
 
+// ComfyUI-GGUF stores some tensors flattened and keeps their PyTorch shape
+// under this key.
+static bool apply_comfy_orig_shape(gguf_context* ctx, TensorStorage& tensor_storage) {
+    int64_t key = gguf_find_key(ctx, ("comfy.gguf.orig_shape." + tensor_storage.name).c_str());
+    if (key < 0) {
+        return true;
+    }
+    if (gguf_get_kv_type(ctx, key) != GGUF_TYPE_ARRAY || gguf_get_arr_type(ctx, key) != GGUF_TYPE_INT32) {
+        return false;
+    }
+    size_t n_dims = gguf_get_arr_n(ctx, key);
+    if (n_dims == 0 || n_dims > SD_MAX_DIMS) {
+        return false;
+    }
+    const auto* dims = static_cast<const int32_t*>(gguf_get_arr_data(ctx, key));
+    std::vector<int64_t> shape(dims, dims + n_dims);
+    if (shape.size() == 5) {
+        shape = {shape[0] * shape[1], shape[2], shape[3], shape[4]};
+    }
+    TensorStorage reshaped(tensor_storage.name,
+                           tensor_storage.type,
+                           shape.data(),
+                           static_cast<int>(shape.size()),
+                           tensor_storage.file_index,
+                           tensor_storage.offset);
+    reshaped.reverse_ne();
+    if (reshaped.nelements() != tensor_storage.nelements() ||
+        reshaped.ne[0] % ggml_blck_size(reshaped.type) != 0) {
+        return false;
+    }
+    tensor_storage = reshaped;
+    return true;
+}
+
 bool is_gguf_file(const std::string& file_path) {
     std::ifstream file(std::filesystem::u8path(file_path), std::ios::binary);
     if (!file.is_open()) {
@@ -97,6 +131,12 @@ bool read_gguf_file(const std::string& file_path,
         size_t offset      = data_offset + gguf_get_tensor_offset(ctx_gguf_, i);
 
         TensorStorage tensor_storage(name, dummy->type, dummy->ne, ggml_n_dims(dummy), 0, offset);
+        if (!apply_comfy_orig_shape(ctx_gguf_, tensor_storage)) {
+            gguf_free(ctx_gguf_);
+            ggml_free(ctx_meta_);
+            set_error(error, "invalid original shape for tensor '" + name + "'");
+            return false;
+        }
 
         if (ggml_nbytes(dummy) != tensor_storage.nbytes()) {
             gguf_free(ctx_gguf_);
