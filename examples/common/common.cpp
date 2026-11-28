@@ -1873,10 +1873,12 @@ static bool parse_audio_array_json_field(const json& parent,
 
 /**
  * Parses a JSON array of reference videos, each a base64 frame array or a base64 video file,
- * into owned videos. A file's soundtrack goes to out_audios at the video's index.
+ * into owned videos. A file's soundtrack goes to out_audios at the video's index; it is not
+ * decoded for the first explicit_audios videos, whose audio comes from ref_video_audios.
  */
 static bool parse_video_array_json_field(const json& parent,
                                          const char* key,
+                                         size_t explicit_audios,
                                          std::vector<std::vector<SDImageOwner>>& out_videos,
                                          std::vector<SDAudioOwner>& out_audios) {
     if (!parent.contains(key)) {
@@ -1895,7 +1897,8 @@ static bool parse_video_array_json_field(const json& parent,
         std::vector<SDImageOwner> frames;
         SDAudioOwner audio;
         if (video.is_string()) {
-            if (!decode_base64_video(video.get<std::string>(), 24, 0, frames, &audio)) {
+            const bool explicit_audio = out_videos.size() < explicit_audios;
+            if (!decode_base64_video(video.get<std::string>(), 24, 0, frames, explicit_audio ? nullptr : &audio)) {
                 return false;
             }
             out_videos.push_back(std::move(frames));
@@ -2204,7 +2207,7 @@ bool SDGenerationParams::from_json_str(
         !parse_image_array_json_field(j, "control_frames", 3, control_frames) ||
         !parse_audio_array_json_field(j, "ref_audios", ref_audios) ||
         !parse_audio_array_json_field(j, "ref_video_audios", ref_video_audios) ||
-        !parse_video_array_json_field(j, "ref_videos", ref_videos, ref_video_file_audios)) {
+        !parse_video_array_json_field(j, "ref_videos", ref_video_audios.size(), ref_videos, ref_video_file_audios)) {
         LOG_ERROR("invalid input image/audio/video array");
         return false;
     }
