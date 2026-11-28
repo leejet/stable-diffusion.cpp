@@ -731,7 +731,11 @@ namespace sd::pipeline {
 
             sd::Tensor<float> upscaled_tensor;
             if (request.hires.upscaler == SD_HIRES_UPSCALER_MODEL) {
-                upscaled_tensor = upscaler->upscale_tensor(decoded);
+                const int factor = request.hires.target_width <= 2 * decoded.shape()[0] &&
+                                           request.hires.target_height <= 2 * decoded.shape()[1]
+                                       ? 2
+                                       : 4;
+                upscaled_tensor  = upscaler->upscale_tensor(decoded, factor);
                 if (upscaled_tensor.empty()) {
                     LOG_ERROR("hires model upscale failed");
                     return {};

@@ -256,6 +256,7 @@ struct SDGenerationParams {
     std::string pulid_id_embedding_path;
     float pulid_id_weight = 1.0f;
 
+    int upscale_factor    = 4;
     int upscale_repeats   = 1;
     int upscale_tile_size = 128;
 

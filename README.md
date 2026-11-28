@@ -86,7 +86,7 @@ API and command-line option may change frequently.***
   - LoRA support, same as [stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui/wiki/Features#lora)
   - Latent Consistency Models support (LCM/LCM-LoRA)
   - Faster and memory efficient latent decoding with [TAESD](./docs/taesd.md)
-  - Upscale images generated with [ESRGAN](./docs/esrgan.md)
+  - Upscale images with [ESRGAN](./docs/esrgan.md) or [Kandinsky ImageSR 2.0](./docs/kandinsky_imagesr.md)
 - Supported backends
   - CPU (AVX, AVX2 and AVX512 support for x86 architectures)
   - CUDA

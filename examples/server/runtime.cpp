@@ -334,6 +334,22 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
             while (!ec && it != end) {
                 std::error_code entry_ec;
                 bool is_reg = it->is_regular_file(entry_ec);
+                if (!entry_ec && it->is_directory(entry_ec)) {
+                    const fs::path& path = it->path();
+                    if (fs::is_regular_file(path / "transformer" / "config.json", entry_ec)) {
+                        UpscalerEntry entry;
+                        entry.name = entry.path    = path.filename().u8string();
+                        entry.fullpath             = fs::absolute(path).lexically_normal().u8string();
+                        entry.image_upscale_factor = get_upscaler_model_scale(entry.fullpath.c_str());
+                        if (entry.image_upscale_factor > 0) {
+                            entry.model_name = "Kandinsky ImageSR 2.0";
+                            entry.scale      = entry.image_upscale_factor;
+                            new_cache.push_back(std::move(entry));
+                        }
+                    }
+                    it.increment(ec);
+                    continue;
+                }
                 if (entry_ec || !is_reg) {
                     it.increment(ec);
                     continue;

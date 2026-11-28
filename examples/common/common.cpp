@@ -534,7 +534,7 @@ ArgOptions SDContextParams::get_options() {
          &pulid_weights_path},
         {"",
          "--upscale-model",
-         "path to esrgan model.",
+         "path to an ESRGAN model file or Kandinsky ImageSR 2.0 bundle directory",
          0,
          &esrgan_path},
         {"",
@@ -1188,8 +1188,12 @@ ArgOptions SDGenerationParams::get_options() {
          "recommended N for NitroSD-Realism around 250 and 500 for NitroSD-Vibrant",
          &sample_params.shifted_timestep},
         {"",
+         "--upscale-factor",
+         "Kandinsky ImageSR scale factor, 2 or 4 (default: 4)",
+         &upscale_factor},
+        {"",
          "--upscale-repeats",
-         "Run the ESRGAN upscaler this many times (default: 1)",
+         "Run the upscaler this many times (default: 1)",
          &upscale_repeats},
         {"",
          "--upscale-tile-size",
@@ -2009,6 +2013,13 @@ static bool resolve_model_file_from_dir(const std::string& model_name,
         }
     }
 
+    const auto bundle = model_dir_path / model_name;
+    if (model_name != "." && model_name != ".." && fs::is_directory(bundle) &&
+        fs::is_regular_file(bundle / "transformer" / "config.json") &&
+        get_upscaler_model_scale(bundle.u8string().c_str()) > 0) {
+        resolved_path = bundle.lexically_normal().string();
+        return true;
+    }
     LOG_ERROR("can not find %s %s in %s", label, model_name.c_str(), model_dir_path.lexically_normal().string().c_str());
     return false;
 }
@@ -2096,6 +2107,7 @@ bool SDGenerationParams::from_json_str(
     load_if_exists("qwen_image_layers", qwen_image_layers);
     load_if_exists("video_frames", video_frames);
     load_if_exists("fps", fps);
+    load_if_exists("upscale_factor", upscale_factor);
     load_if_exists("upscale_repeats", upscale_repeats);
     load_if_exists("seed", seed);
 
@@ -2575,6 +2587,10 @@ bool SDGenerationParams::validate(SDMode mode) {
         return false;
     }
 
+    if (upscale_factor != 2 && upscale_factor != 4) {
+        LOG_ERROR("error: --upscale-factor must be 2 or 4");
+        return false;
+    }
     if (upscale_repeats < 1) {
         return false;
     }
@@ -2919,6 +2935,7 @@ std::string SDGenerationParams::to_string() const {
         << "  strength: " << strength << ",\n"
         << "  control_strength: " << control_strength << ",\n"
         << "  seed: " << seed << ",\n"
+        << "  upscale_factor: " << upscale_factor << ",\n"
         << "  upscale_repeats: " << upscale_repeats << ",\n"
         << "  upscale_tile_size: " << upscale_tile_size << ",\n"
         << "  hires: { enabled: " << (hires_enabled ? "true" : "false")

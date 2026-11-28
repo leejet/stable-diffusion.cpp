@@ -10,12 +10,16 @@
 #include <memory>
 #include <string>
 
+namespace KandinskyImageSR {
+    struct Upscaler;
+}
+
 struct UpscalerGGML {
     SDBackendManager backend_manager;
     std::shared_ptr<ModelManager> model_manager;
     ggml_type model_data_type = GGML_TYPE_F16;
     std::shared_ptr<ESRGAN> esrgan_upscaler;
-    std::string esrgan_path;
+    std::unique_ptr<KandinskyImageSR::Upscaler> kandinsky_upscaler;
     int n_threads;
     sd::ParallelExecutor tensor_executor;
     bool direct                 = false;
@@ -31,10 +35,11 @@ struct UpscalerGGML {
                  std::string params_backend_spec = "");
     ~UpscalerGGML();
 
-    bool load_from_file(const std::string& esrgan_path,
+    bool load_from_file(const std::string& model_path,
                         int n_threads);
     void set_max_graph_vram_bytes(size_t max_vram_bytes);
-    sd::Tensor<float> upscale_tensor(const sd::Tensor<float>& input_tensor);
+    sd::Tensor<float> upscale_tensor(const sd::Tensor<float>& input_tensor, uint32_t factor = 4);
+    int default_scale() const;
     sd_image_t upscale(sd_image_t input_image, uint32_t upscale_factor);
 };
 

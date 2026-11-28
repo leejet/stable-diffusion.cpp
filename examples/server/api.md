@@ -651,11 +651,7 @@ Typical status codes:
 
 #### `POST /sdcpp/v1/upscale`
 
-Runs one RGB ESRGAN upscaler over an image, with no generation involved. Latent upscaler models remain available for hires generation but cannot be used here.
-
-This is the HTTP equivalent of `sd-cli -M upscale`: no diffusion model, text
-encoder or sampling is used, so it is fast enough to answer synchronously and
-does not create a job.
+Runs an RGB upscaler synchronously, like `sd-cli -M upscale`. Place an ESRGAN model file or a Kandinsky ImageSR 2.0 bundle directory under `--hires-upscalers-dir`.
 
 Request fields:
 
@@ -664,7 +660,8 @@ Request fields:
 | `image` | `string` | Required. Base64 or data URL image |
 | `upscaler` | `string` | A name from `upscalers` with `image_upscale: true`; the first compatible entry when omitted |
 | `repeats` | `integer` | Run the upscaler this many times, 1 to 4 (default `1`) |
-| `tile_size` | `integer` | Tile size, defaulting to the server's `--upscale-tile-size` |
+| `upscale_factor` | `integer` | Kandinsky ImageSR accepts 2 or 4 (default 4). ESRGAN uses its model scale. |
+| `tile_size` | `integer` | ESRGAN tile size, defaulting to the server's `--upscale-tile-size`. Kandinsky ImageSR uses 1024-pixel output tiles. |
 | `output_format` | `string` | `png`, `jpeg`, or `webp` when built with WebP support (default `png`); unsupported formats return 400 |
 | `output_compression` | `integer` | Range is clamped to `0..100` |
 

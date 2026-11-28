@@ -545,7 +545,7 @@ SD_API bool generate_video(sd_ctx_t* sd_ctx,
 
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 
-SD_API upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path,
+SD_API upscaler_ctx_t* new_upscaler_ctx(const char* model_path,
                                         bool direct,
                                         int n_threads,
                                         int tile_size,
@@ -553,6 +553,7 @@ SD_API upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path,
                                         const char* params_backend);
 SD_API void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx);
 
+// Kandinsky ImageSR accepts a factor of 2 or 4. ESRGAN uses the intrinsic model scale.
 SD_API bool upscale(upscaler_ctx_t* upscaler_ctx,
                     sd_image_t input_image,
                     uint32_t upscale_factor,
@@ -560,7 +561,8 @@ SD_API bool upscale(upscaler_ctx_t* upscaler_ctx,
                     int* num_images_out);
 
 SD_API int get_upscale_factor(upscaler_ctx_t* upscaler_ctx);
-// Reads model metadata only; returns 0 if the file is not a recognized RGB ESRGAN model.
+SD_API bool upscaler_supports_factor(upscaler_ctx_t* upscaler_ctx, uint32_t factor);
+// Returns the default scale from model metadata, or 0 for an unrecognized upscaler.
 SD_API int get_upscaler_model_scale(const char* model_path);
 
 typedef struct adetailer_ctx_t adetailer_ctx_t;

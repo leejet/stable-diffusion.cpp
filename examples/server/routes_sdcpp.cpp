@@ -474,7 +474,7 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 res.set_content(R"({"error":"body must be an object"})", "application/json");
                 return;
             }
-            for (const char* key : {"repeats", "tile_size", "output_compression"}) {
+            for (const char* key : {"repeats", "tile_size", "upscale_factor", "output_compression"}) {
                 if (!body.contains(key)) {
                     continue;
                 }
@@ -535,7 +535,7 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
             if (model_path.empty()) {
                 res.status = 400;
                 res.set_content(json({{"error", wanted.empty()
-                                                    ? std::string("no RGB ESRGAN upscaler models are available; "
+                                                    ? std::string("no RGB upscaler models are available; "
                                                                   "start the server with --hires-upscalers-dir")
                                                     : "no compatible image upscaler called " + wanted}})
                                     .dump(),
@@ -543,7 +543,8 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 return;
             }
 
-            if (!valid_upscale_dimensions(input.get(), model_scale, repeats)) {
+            const int requested_factor = body.value("upscale_factor", model_scale);
+            if (!valid_upscale_dimensions(input.get(), requested_factor, repeats)) {
                 res.status = 400;
                 res.set_content(R"({"error":"upscaled dimensions must not exceed 8192 x 8192"})", "application/json");
                 return;
@@ -562,7 +563,12 @@ void register_sdcpp_api_endpoints(httplib::Server& svr, ServerRuntime& rt) {
                 res.set_content(R"({"error":"the upscaler model could not be loaded"})", "application/json");
                 return;
             }
-            const int factor = get_upscale_factor(upscaler_ctx.get());
+            const int factor = body.contains("upscale_factor") ? requested_factor : get_upscale_factor(upscaler_ctx.get());
+            if (!upscaler_supports_factor(upscaler_ctx.get(), factor)) {
+                res.status = 400;
+                res.set_content(R"({"error":"unsupported scale factor for this upscaler"})", "application/json");
+                return;
+            }
             // The model file may have changed since its metadata was cached.
             if (!valid_upscale_dimensions(input.get(), factor, repeats)) {
                 res.status = 400;
