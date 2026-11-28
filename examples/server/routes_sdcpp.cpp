@@ -48,7 +48,7 @@ static fs::path resolve_display_model_path(const ServerRuntime& runtime) {
     return {};
 }
 
-static json make_sample_params_json(const SDSampleParams& sample_params, const std::optional<std::vector<int>>& skip_layers, const std::optional<std::vector<float>>& custom_sigmas = {}) {
+static json make_sample_params_json(const SDSampleParams& sample_params, const std::optional<std::vector<int>>& skip_layers, const std::optional<std::vector<float>>& custom_sigmas) {
     const auto& guidance = sample_params.guidance;
     return {
         {"scheduler", sample_params.scheduler},
@@ -114,8 +114,8 @@ static json make_img_gen_defaults_json(const SDGenerationParams& defaults, const
     };
 }
 
-static json make_vid_gen_defaults_json(const SDGenerationParams& defaults, const std::string& output_format) {
-    return {
+static json make_vid_gen_defaults_json(const SDGenerationParams& defaults, const std::string& output_format, bool high_noise) {
+    json result = {
         {"prompt", defaults.prompt},
         {"negative_prompt", defaults.negative_prompt},
         {"clip_skip", defaults.clip_skip},
@@ -125,10 +125,8 @@ static json make_vid_gen_defaults_json(const SDGenerationParams& defaults, const
         {"seed", defaults.seed},
         {"video_frames", defaults.video_frames},
         {"fps", defaults.fps},
-        {"moe_boundary", defaults.moe_boundary},
         {"vace_strength", defaults.vace_strength},
         {"sample_params", make_sample_params_json(defaults.sample_params, defaults.skip_layers, defaults.custom_sigmas)},
-        {"high_noise_sample_params", make_sample_params_json(defaults.high_noise_sample_params, defaults.high_noise_skip_layers)},
         {"hires", make_hires_json(defaults)},
         {"vae_tiling_params", make_vae_tiling_json(defaults.vae_tiling_params)},
         {"cache_mode", defaults.cache_mode},
@@ -138,6 +136,15 @@ static json make_vid_gen_defaults_json(const SDGenerationParams& defaults, const
         {"output_format", output_format},
         {"output_compression", 100},
     };
+    if (high_noise) {
+        result["moe_boundary"]             = defaults.moe_boundary;
+        result["high_noise_sample_params"] = {
+            {"scheduler", defaults.high_noise_sample_params.scheduler},
+            {"sample_steps", defaults.high_noise_sample_params.sample_steps},
+            {"flow_shift", finite_number_or_null(defaults.high_noise_sample_params.flow_shift)},
+        };
+    }
+    return result;
 }
 
 static json make_img_gen_features_json() {
@@ -158,7 +165,7 @@ static json make_img_gen_features_json() {
 }
 
 /** Builds the default feature set advertised for vid_gen requests. */
-static json make_vid_gen_features_json() {
+static json make_vid_gen_features_json(bool high_noise) {
     return {
         {"init_image", true},
         {"end_image", true},
@@ -166,7 +173,7 @@ static json make_vid_gen_features_json() {
         {"ref_videos", true},
         {"ref_audios", true},
         {"ref_video_audios", true},
-        {"high_noise_sample_params", false},
+        {"high_noise_sample_params", high_noise},
         {"lora", true},
         {"vae_tiling", true},
         {"cache", true},
@@ -310,8 +317,9 @@ static json make_capabilities_json(ServerRuntime& runtime) {
         features_by_mode["img_gen"] = recipe_features(make_img_gen_features_json(), false);
     }
     if (supports_vid) {
-        defaults_by_mode["vid_gen"] = make_vid_gen_defaults_json(defaults, default_vid_output_format);
-        features_by_mode["vid_gen"] = recipe_features(make_vid_gen_features_json(), true);
+        const bool high_noise       = generation_features.at("high_noise").get<bool>();
+        defaults_by_mode["vid_gen"] = make_vid_gen_defaults_json(defaults, default_vid_output_format, high_noise);
+        features_by_mode["vid_gen"] = recipe_features(make_vid_gen_features_json(high_noise), true);
     }
 
     json top_level_defaults       = json::object();

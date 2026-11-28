@@ -2658,7 +2658,8 @@ SDOptPtr SDGenerationParams::to_video_opt() {
     opt.set_float("sample.flow_shift", high_noise_sample_params.flow_shift);
     opt.set_int("sample.shifted_timestep", high_noise_sample_params.shifted_timestep);
     set_sample_options(opt, "sample.", sample_params, skip_layers, custom_sigmas, extra_sample_args);
-    set_sample_options(opt, "high_noise_sample.", high_noise_sample_params, high_noise_skip_layers, {}, high_noise_extra_sample_args);
+    // Native video workflows share the sampler and guidance between stages.
+    opt.set_int("high_noise_sample.steps", high_noise_sample_params.sample_steps);
     set_cache_options(opt, cache_params);
     set_tiling_options(opt, vae_tiling_params);
     return opt.finish();
