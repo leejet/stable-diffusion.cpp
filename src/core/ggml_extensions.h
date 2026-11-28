@@ -50,22 +50,37 @@ bool sd_ggml_valid_convrot_group(int group);
 ggml_ext_op_t sd_ggml_i8_op();
 ggml_ext_op_t sd_ggml_requantize_i8_op();
 
-constexpr int SD_REQUANTIZE_I8_BLOCK_SIZE = 32;
+struct SDI8QuantBlock {
+    int size;
+    size_t bytes;
+};
 
-constexpr size_t sd_ggml_requantize_i8_block_bytes(ggml_type type) {
+constexpr SDI8QuantBlock sd_ggml_requantize_i8_block(ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0:
-            return 18;
+            return {32, 18};
         case GGML_TYPE_Q4_1:
-            return 20;
+            return {32, 20};
         case GGML_TYPE_Q5_0:
-            return 22;
+            return {32, 22};
         case GGML_TYPE_Q5_1:
-            return 24;
+            return {32, 24};
         case GGML_TYPE_Q8_0:
-            return 34;
+            return {32, 34};
+        case GGML_TYPE_Q2_K:
+            return {256, 84};
+        case GGML_TYPE_Q3_K:
+            return {256, 110};
+        case GGML_TYPE_Q4_K:
+            return {256, 144};
+        case GGML_TYPE_Q5_K:
+            return {256, 176};
+        case GGML_TYPE_Q6_K:
+            return {256, 210};
+        case GGML_TYPE_Q8_K:
+            return {256, 292};
         default:
-            return 0;
+            return {};
     }
 }
 

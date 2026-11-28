@@ -166,10 +166,11 @@ these formats because they require the application extension API.
 
 ## Runtime requantization to INT8
 
-Use `--linear-type i8` to run eligible Q4_0, Q4_1, Q5_0, Q5_1, and Q8_0 linear
-layers through INT8 GEMM on CUDA, HIP, MUSA, and Vulkan. A bare mode applies to
-all models in the context, including diffusion models and text encoders loaded
-with `--llm`. The default is `auto`, which currently behaves like `raw`. With
+Use `--linear-type i8` to run eligible Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q2_K, Q3_K,
+Q4_K, Q5_K, Q6_K, and Q8_K linear layers through INT8 GEMM on CUDA, HIP, MUSA,
+and Vulkan. A bare mode applies to all models in the context, including
+diffusion models and text encoders loaded with `--llm`. The default is `auto`,
+which currently behaves like `raw`. With
 `--linear-type raw`, each layer uses its original execution path. Native INT8
 weights use their INT8 path in all three modes. For floating-point checkpoints,
 use `--type q4_0` (or another supported weight type) to quantize eligible weights

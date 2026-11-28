@@ -4,15 +4,18 @@
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 #endif
-#ifdef Q8_HALFWORDS
+#if defined(Q8_HALFWORDS) || (defined(QUANT_K_BITS) && (QUANT_K_BITS == 3 || QUANT_K_BITS == 6))
 #extension GL_EXT_shader_16bit_storage : require
+#define SOURCE_HALFWORDS
 #endif
 
-#ifdef Q8_RETAIN
+#if defined(RETAIN_ROTATION) || defined(SUBGROUP_ROTATION)
 #extension GL_KHR_shader_subgroup_shuffle : require
 #extension GL_EXT_control_flow_attributes : require
 layout(local_size_x = 256) in;
+#ifdef RETAIN_ROTATION
 layout(constant_id = 0) const uint cached_groups = 4;
+#endif
 #else
 layout(local_size_x = 128) in;
 #endif
@@ -24,13 +27,13 @@ layout(push_constant) uniform Parameters {
 }
 p;
 
-#if defined(Q8_0) || defined(QUANT_BITS)
+#if defined(Q8_0) || defined(QUANT_BITS) || defined(QUANT_K_BITS)
 #define ROTATE_WEIGHTS
 #endif
 
 #ifdef ROTATE_WEIGHTS
 layout(binding = 0, std430) readonly buffer Source {
-#ifdef Q8_HALFWORDS
+#ifdef SOURCE_HALFWORDS
     uint16_t source_halfwords[];
 #else
     uint source_words[];
@@ -52,11 +55,16 @@ shared float maxima[gl_WorkGroupSize.x / 32];
 shared float maxima[gl_WorkGroupSize.x];
 #endif
 
-#if defined(ROTATE_WEIGHTS) && !defined(Q8_HALFWORDS)
+#ifdef ROTATE_WEIGHTS
 uint load_u32(uint byte_offset) {
+#ifdef SOURCE_HALFWORDS
+    const uint index = byte_offset / 2;
+    return uint(source_halfwords[index]) | (uint(source_halfwords[index + 1]) << 16);
+#else
     const uint index = byte_offset / 4;
     const uint word  = source_words[index];
     return (byte_offset & 2) == 0 ? word : (word >> 16) | (source_words[index + 1] << 16);
+#endif
 }
 #endif
 
@@ -81,11 +89,83 @@ ivec4 load_q8(const uint row, const uint word, out float scale) {
 }
 #endif
 
+#ifdef QUANT_K_BITS
+uint load_byte(uint offset) {
+#ifdef SOURCE_HALFWORDS
+    return (uint(source_halfwords[offset / 2]) >> (8 * (offset % 2))) & 255u;
+#else
+    return (source_words[offset / 4] >> (8 * (offset % 4))) & 255u;
+#endif
+}
+
+#ifdef SOURCE_HALFWORDS
+float load_half(uint offset) {
+    // Q3_K and Q6_K can end on a halfword boundary with no padding in the binding.
+    return unpackHalf2x16(uint(source_halfwords[offset / 2])).x;
+}
+#endif
+
+uvec4 load_bytes(uint offset) {
+    return (uvec4(load_u32(offset)) >> uvec4(0, 8, 16, 24)) & 255u;
+}
+
+vec4 load_k_values(uint block_index, uint i) {
+    // A K block contains one H256 group. Each invocation decodes four adjacent weights.
+#if QUANT_K_BITS == 2
+    const uint block   = block_index * 84;
+    const vec2 dm      = unpackHalf2x16(source_words[(block + 80) / 4]);
+    const uint scale   = load_byte(block + i / 16);
+    const uvec4 values = (load_bytes(block + 16 + i / 128 * 32 + i % 32) >> (2 * (i / 32 % 4))) & 3u;
+    return (dm.x * float(scale & 15u)) * vec4(values) - dm.y * float(scale >> 4);
+#elif QUANT_K_BITS == 3
+    const uint block      = block_index * 110;
+    const float d         = load_half(block + 108);
+    const uint group      = i / 16;
+    const uint scale_low  = (load_byte(block + 96 + group % 8) >> (4 * (group / 8))) & 15u;
+    const uint scale_high = (load_byte(block + 104 + group % 4) >> (2 * (group / 4))) & 3u;
+    const int scale       = int(scale_low | (scale_high << 4)) - 32;
+    const uvec4 low       = (load_bytes(block + 32 + i / 128 * 32 + i % 32) >> (2 * (i / 32 % 4))) & 3u;
+    const uvec4 high      = (load_bytes(block + i % 32) >> (i / 32)) & 1u;
+    return (d * float(scale)) * vec4(ivec4(low | (high << 2)) - 4);
+#elif QUANT_K_BITS == 4 || QUANT_K_BITS == 5
+    const uint high_bytes = QUANT_K_BITS == 5 ? 32u : 0u;
+    const uint block      = block_index * (144 + high_bytes);
+    const vec2 dm         = unpackHalf2x16(source_words[block / 4]);
+    const uint scales     = block + 4;
+    const uint group      = i / 32;
+    const uint scale      = group < 4 ? load_byte(scales + group) & 63u
+                                      : (load_byte(scales + group + 4) & 15u) | ((load_byte(scales + group - 4) >> 6) << 4);
+    const uint minimum    = group < 4 ? load_byte(scales + group + 4) & 63u
+                                      : (load_byte(scales + group + 4) >> 4) | ((load_byte(scales + group) >> 6) << 4);
+    uvec4 values          = (load_bytes(block + 16 + high_bytes + i / 64 * 32 + i % 32) >> (4 * (group % 2))) & 15u;
+#if QUANT_K_BITS == 5
+    values |= ((load_bytes(block + 16 + i % 32) >> group) & 1u) << 4;
+#endif
+    return (dm.x * float(scale)) * vec4(values) - dm.y * float(minimum);
+#elif QUANT_K_BITS == 6
+    const uint block = block_index * 210;
+    const float d    = load_half(block + 208);
+    const int scale  = bitfieldExtract(int(load_byte(block + 192 + i / 16)), 0, 8);
+    const uvec4 low  = (load_bytes(block + i / 128 * 64 + i % 64) >> (4 * (i / 64 % 2))) & 15u;
+    const uvec4 high = (load_bytes(block + 128 + i / 128 * 32 + i % 32) >> (2 * (i / 32 % 4))) & 3u;
+    return (d * float(scale)) * vec4(ivec4(low | (high << 4)) - 32);
+#elif QUANT_K_BITS == 8
+    const uint block = block_index * 292;
+    const float d    = uintBitsToFloat(source_words[block / 4]);
+    const int values = int(source_words[(block + 4 + i) / 4]);
+    return d * vec4(bitfieldExtract(values, 0, 8), bitfieldExtract(values, 8, 8),
+                    bitfieldExtract(values, 16, 8), bitfieldExtract(values, 24, 8));
+#endif
+}
+#endif
+
 vec4 load_values(const uint row, const uint word) {
 #ifdef Q8_0
     float scale;
     const ivec4 values = load_q8(row, word, scale);
     return scale * vec4(values);
+#elif defined(QUANT_K_BITS)
+    return load_k_values(row * (p.words_per_row / 64) + word / 64, (word % 64) * 4);
 #elif defined(QUANT_BITS)
     const uint param_bytes = QUANT_AFFINE == 1 ? 4u : 2u;
     const uint high_bytes  = QUANT_BITS == 5 ? 4u : 0u;
@@ -130,7 +210,7 @@ vec4 rotate_four(vec4 a, vec4 b, vec4 c, vec4 d, uint i) {
 }
 #endif
 
-#ifdef Q8_RETAIN
+#if defined(RETAIN_ROTATION) || defined(SUBGROUP_ROTATION)
 vec4 rotate_lanes(vec4 value, uint lane, uint stride) {
     const uint first = lane & ~(3u * stride);
     return rotate_four(subgroupShuffle(value, first), subgroupShuffle(value, first + stride),
@@ -139,7 +219,26 @@ vec4 rotate_lanes(vec4 value, uint lane, uint stride) {
 }
 
 void rotate_subgroup(uint row, uint word, out vec4 lower, out vec4 upper) {
-    const uint lane  = gl_SubgroupInvocationID;
+    const uint lane = gl_SubgroupInvocationID;
+#ifdef QUANT_K_BITS
+    // The three H4 stages across words are a Walsh-Hadamard transform with
+    // swapped bits in each input pair and sign changes on digit 3.
+    const uint block_index = row * (p.words_per_row / 64) + word / 64;
+    const uint source      = ((lane & 0x15u) << 1) | ((lane & 0x2Au) >> 1);
+    const float lower_sign = (bitCount(lane & (lane >> 1) & 0x15u) & 1) != 0 ? -1.0 : 1.0;
+    const float upper_sign = (lane & 16u) != 0 ? -lower_sign : lower_sign;
+    lower                  = rotate_word(load_k_values(block_index, source * 4) * (lower_sign / 16.0));
+    upper                  = rotate_word(load_k_values(block_index, (source + 16) * 4) * (upper_sign / 16.0));
+    [[unroll]] for (uint stride = 1; stride < 32; stride *= 2) {
+        const vec4 other_lower = subgroupShuffle(lower, lane ^ stride);
+        const vec4 other_upper = subgroupShuffle(upper, lane ^ stride);
+        lower                  = ((lane & stride) == 0 ? lower : -lower) + other_lower;
+        upper                  = ((lane & stride) == 0 ? upper : -upper) + other_upper;
+    }
+    const vec4 lower_sum = lower + upper;
+    upper                = (lower - upper) * upper_sign;
+    lower                = lower_sum * lower_sign;
+#else
     lower            = rotate_word(load_values(row, word) * (1.0 / 16.0));
     upper            = rotate_word(load_values(row, word + 32) * (1.0 / 16.0));
     lower            = rotate_lanes(rotate_lanes(lower, lane, 1), lane, 4);
@@ -151,6 +250,7 @@ void rotate_subgroup(uint row, uint word, out vec4 lower, out vec4 upper) {
     const vec4 d     = subgroupShuffle(upper, first + 16);
     lower            = rotate_four(a, b, c, d, lane / 16);
     upper            = rotate_four(a, b, c, d, 2 + lane / 16);
+#endif
 }
 #elif defined(ROTATE_WEIGHTS)
 shared vec4 rotation[2][gl_WorkGroupSize.x];
@@ -183,7 +283,7 @@ void pack_word(uint row, uint word, vec4 values, float inverse) {
 void pack_row(const uint row) {
     const uint tid = gl_LocalInvocationID.x;
     float maximum  = 0.0;
-#ifdef Q8_RETAIN
+#ifdef RETAIN_ROTATION
     // One 32-lane subgroup owns an H256 group, with two vec4 values per lane.
     const uint subgroups = gl_WorkGroupSize.x / 32;
     const uint groups    = p.words_per_row / 64;
@@ -194,6 +294,13 @@ void pack_row(const uint row) {
             continue;
         rotate_subgroup(row, group * 64 + gl_SubgroupInvocationID, lower[slot], upper[slot]);
         const vec4 peak = max(abs(lower[slot]), abs(upper[slot]));
+        maximum         = max(maximum, max(max(peak.x, peak.y), max(peak.z, peak.w)));
+    }
+#elif defined(SUBGROUP_ROTATION)
+    for (uint group = gl_SubgroupID; group < p.words_per_row / 64; group += gl_WorkGroupSize.x / 32) {
+        vec4 lower, upper;
+        rotate_subgroup(row, group * 64 + gl_SubgroupInvocationID, lower, upper);
+        const vec4 peak = max(abs(lower), abs(upper));
         maximum         = max(maximum, max(max(peak.x, peak.y), max(peak.z, peak.w)));
     }
 #elif defined(ROTATE_WEIGHTS)
@@ -241,7 +348,7 @@ void pack_row(const uint row) {
     const float inverse = scale == 0.0 ? 0.0 : 1.0 / scale;
 #endif
 
-#ifdef Q8_RETAIN
+#ifdef RETAIN_ROTATION
     [[unroll]] for (uint slot = 0; slot < cached_groups; ++slot) {
         const uint group = gl_SubgroupID + slot * subgroups;
         if (group >= groups)
@@ -249,6 +356,14 @@ void pack_row(const uint row) {
         const uint word = group * 64 + gl_SubgroupInvocationID;
         pack_word(row, word, lower[slot], inverse);
         pack_word(row, word + 32, upper[slot], inverse);
+    }
+#elif defined(SUBGROUP_ROTATION)
+    for (uint group = gl_SubgroupID; group < p.words_per_row / 64; group += gl_WorkGroupSize.x / 32) {
+        const uint word = group * 64 + gl_SubgroupInvocationID;
+        vec4 lower, upper;
+        rotate_subgroup(row, word, lower, upper);
+        pack_word(row, word, lower, inverse);
+        pack_word(row, word + 32, upper, inverse);
     }
 #else
 #ifdef ROTATE_WEIGHTS
