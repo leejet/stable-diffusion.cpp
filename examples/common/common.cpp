@@ -485,7 +485,7 @@ ArgOptions SDContextParams::get_options() {
          &control_net_path},
         {"",
          "--embd-dir",
-         "embeddings directory",
+         "textual inversion embeddings directory (SD 1.x/2.x/SDXL only, see docs/embeddings.md)",
          0,
          &embedding_dir},
         {"",

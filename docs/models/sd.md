@@ -3,6 +3,8 @@
 Stable Diffusion 1.x, 2.x, and SDXL support text-to-image and image-to-image
 generation from single-file checkpoints.
 
+See [Textual Inversion Embeddings](../embeddings.md) for `--embd-dir` and `<embedding:...>` usage with SD 1.x/2.x/SDXL.
+
 ## Model files
 
 | Component | Weights and downloads | CLI option | Requirement |
