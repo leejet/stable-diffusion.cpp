@@ -133,16 +133,8 @@ namespace SD_CUDA_NAMESPACE {
 
         static __device__ __forceinline__ void rotate_k_group(float (&values)[8], int lane) {
             // H4 is a Walsh-Hadamard transform with sign changes on index 3 and
-            // a swap of the two index bits. Permute the inputs for contiguous stores.
-#pragma unroll
-            for (int stride = 1; stride < lanes; stride *= 2) {
-#pragma unroll
-                for (int j = 0; j < 8; ++j) {
-                    const float value = values[j];
-                    const float other = cuda_shuffle_xor(value, stride, lanes);
-                    values[j]         = (lane & stride ? -value : value) + other;
-                }
-            }
+            // a swap of the two index bits. Each lane owns eight adjacent weights
+            // so the first three stages are local and the result can be stored as a pair of words.
 #pragma unroll
             for (int stride = 1; stride < 8; stride *= 2) {
 #pragma unroll
@@ -155,17 +147,27 @@ namespace SD_CUDA_NAMESPACE {
                     }
                 }
             }
+#pragma unroll
+            for (int stride = 1; stride < lanes; stride *= 2) {
+#pragma unroll
+                for (int j = 0; j < 8; ++j) {
+                    const float value = values[j];
+                    const float other = cuda_shuffle_xor(value, stride, lanes);
+                    values[j]         = (lane & stride ? -value : value) + other;
+                }
+            }
         }
 
         template <ggml_type type, int block_size = sd_ggml_requantize_i8_block(type).size>
         static __device__ __forceinline__ void load_rotated_group(const WeightBlock<type>* blocks, int lane, float (&values)[8]) {
 #pragma unroll
             for (int j = 0; j < 8; ++j) {
-                const int i = j * lanes + lane;
                 if constexpr (cuda_kind == GGML_EXT_GPU_CUDA && block_size == group_size) {
+                    const int i      = lane * 8 + j;
                     const int source = ((i & 0x55) << 1) | ((i & 0xAA) >> 1);
                     values[j]        = h256_signed(blocks[0].decode(source) * (1.0f / 16.0f), i);
                 } else {
+                    const int i = j * lanes + lane;
                     values[j] = blocks[i / block_size].decode(i % block_size) * (1.0f / 16.0f);
                 }
             }
@@ -236,13 +238,21 @@ namespace SD_CUDA_NAMESPACE {
                 float values[8];
                 if constexpr (cached_groups == 0)
                     load_rotated_group<type>(blocks + block, lane, values);
+                const float* rotated = cached_groups > 0 ? retained[slot] : values;
+                if constexpr (cuda_kind == GGML_EXT_GPU_CUDA && block_size == group_size) {
+                    uint2 packed = {};
 #pragma unroll
-                for (int j = 0; j < 8; ++j) {
-                    float value = cached_groups > 0 ? retained[slot][j] : values[j];
-                    const int i = j * lanes + lane;
-                    if constexpr (cuda_kind == GGML_EXT_GPU_CUDA && block_size == group_size)
-                        value = h256_signed(value, i);
-                    output[block * block_size + i] = requantize_i8_value(value * inverse);
+                    for (int j = 0; j < 4; ++j) {
+                        const auto lower = requantize_i8_value(h256_signed(rotated[j], lane * 8 + j) * inverse);
+                        const auto upper = requantize_i8_value(h256_signed(rotated[j + 4], lane * 8 + j + 4) * inverse);
+                        packed.x |= uint32_t(uint8_t(lower)) << (8 * j);
+                        packed.y |= uint32_t(uint8_t(upper)) << (8 * j);
+                    }
+                    reinterpret_cast<uint2*>(output + block * block_size)[lane] = packed;
+                } else {
+#pragma unroll
+                    for (int j = 0; j < 8; ++j)
+                        output[block * block_size + j * lanes + lane] = requantize_i8_value(rotated[j] * inverse);
                 }
             }
         }
@@ -252,7 +262,9 @@ namespace SD_CUDA_NAMESPACE {
             const int64_t k = weight->ne[0], n = weight->ne[1];
             const auto info        = cuda_device_info(device);
             const size_t alignment = weight->type == GGML_TYPE_Q8_K ? alignof(float) : alignof(uint16_t);
+            const bool packed      = cuda_kind == GGML_EXT_GPU_CUDA && sd_ggml_requantize_i8_block(weight->type).size == group_size;
             return info.device >= 0 && k <= INT_MAX / 16384 && n <= INT_MAX && aligned(weight, alignment) &&
+                   (!packed || aligned(node, alignof(uint2))) &&
                    (cuda_kind != GGML_EXT_GPU_CUDA || blas_supported(device, info, n));
         }
 
