@@ -1,0 +1,63 @@
+# version: 0.0.0
+# docs/models/kontext.md — Example
+
+var {
+    model_path = "../models/diffusion_models/flux1-kontext-dev-q8_0.gguf"
+    clip_l_path = "../models/text_encoders/clip_l.safetensors"
+    t5_path = "../models/text_encoders/t5xxl_fp16.safetensors"
+    vae_path = "../models/vae/ae.sft"
+
+    reference_0_path = "./flux1-dev-q8_0.png"
+    output_path = "output.png"
+
+    prompt = "change 'flux.cpp' to 'kontext.cpp'"
+
+    seed = 42
+    rng_type = "cuda"
+
+    steps = 20
+    method = "euler"
+    scheduler = "flux"
+}
+
+fn sqrt_step(estimate, index, value) {
+    return (estimate + value / estimate) / 2
+}
+
+fn positive_sqrt(value) {
+    return fold(tensor::to_list(tensor::arange(0, 32)), value + 1.0, process = sqrt_step, value = value)
+}
+
+fn fit_reference_area(input, area, factor, mode) {
+    shape = tensor::shape(input)
+    width = positive_sqrt(area * shape[0] / shape[1])
+    rounded = [math::round(width / factor) * factor, math::round(width * shape[1] / shape[0] / factor) * factor]
+    size = tensor::maximum(tensor::vector(rounded, dtype = "i64"), tensor::full([2], factor, dtype = "i64"))
+    return tensor::interpolate(input, size = size, mode = mode)
+}
+
+fn main() {
+    reference_0 = image::load(reference_0_path)
+    width = tensor::shape(reference_0)[1]
+    height = tensor::shape(reference_0)[2]
+
+    model = load_dit(model_path, family = "flux")
+    text = load_text_encoder(clip_l_path, backend = "cpu", clip_l_path = clip_l_path, family = "flux", t5_path = t5_path)
+    vae = load_vae(vae_path, family = "flux")
+
+    encode_rng = make_rng(rng_type, seed = seed)
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    reference_0_original = image::to_f32(reference_0, channels = 3)
+    reference_0_pixels = fit_reference_area(reference_0_original, math::min(1048576, width * height), 16, mode = "bilinear")
+    reference_latent_0 = vae_to_dit_latents(vae, vae_encode(vae, reference_0_pixels, rng = encode_rng))
+
+    condition = encode_prompt(text, prompt, width = width, height = height)
+    predict = predictor(model, condition, ref_latents = [reference_latent_0])
+    sigmas = make_sigmas(predict, latent = base, steps = steps, scheduler = scheduler)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(predict, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = predict, method = method, rng = rng)
+    image = vae_decode(vae, dit_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return {image = image, latent = latent}
+}

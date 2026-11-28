@@ -1,0 +1,61 @@
+# version: 0.0.0
+# docs/models/fibo2.md — Fibo 2.0 Dev
+
+var {
+    model_path = "../models/diffusion_models/fibo2_dev_int8_convrot.safetensors"
+    text_path = "../models/text_encoders/Qwen3-VL-4B-Instruct-Q4_K_M.gguf"
+    vision_path = "../models/text_encoders/Qwen3-VL-4B-Instruct-mmproj-BF16.gguf"
+    vae_path = "../models/vae/flux2_ae.safetensors"
+
+    reference_0_path = "../inputs/flux/flux1-dev-q8_0.png"
+    output_path = "output.png"
+
+    prompt = "change 'flux.cpp' to 'fibo2.cpp'"
+    negative_prompt = ""
+
+    seed = 42
+    rng_type = "cuda"
+
+    steps = 20
+    cfg_scale = 5.0
+    method = "euler"
+    scheduler = "flux"
+}
+
+fn center_crop_reference(input, width, height) {
+    shape = tensor::shape(input)
+    scale = tensor::maximum(tensor::vector([width / shape[0]]), tensor::vector([height / shape[1]]))[0]
+    resized_width = math::ceil(shape[0] * scale)
+    resized_height = math::ceil(shape[1] * scale)
+    resized = tensor::interpolate(input, size = [resized_width, resized_height], mode = "lanczos")
+    return tensor::crop(resized, axes = [0, 1], start = [math::floor((resized_width - width) / 2), math::floor((resized_height - height) / 2)], size = [width, height])
+}
+
+fn main() {
+    reference_0 = image::load(reference_0_path)
+    width = tensor::shape(reference_0)[1]
+    height = tensor::shape(reference_0)[2]
+
+    model = load_dit(model_path, family = "fibo2", params_backend = "cpu")
+    text = load_text_encoder(text_path, family = "fibo2", params_backend = "cpu", vision_path = vision_path)
+    vae = load_vae(vae_path, family = "fibo2", params_backend = "cpu")
+
+    encode_rng = make_rng(rng_type, seed = seed)
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    reference_0_original = image::to_f32(reference_0, channels = 3)
+    reference_0_pixels = center_crop_reference(reference_0_original, width, height)
+    reference_latent_0 = vae_to_dit_latents(vae, vae_encode(vae, reference_0_pixels, rng = encode_rng))
+
+    positive = encode_prompt(text, prompt, width = width, height = height, media = [reference_0_pixels])
+    negative = encode_prompt(text, negative_prompt, width = width, height = height)
+    pos = predictor(model, positive, ref_latents = [reference_latent_0], ref_index_mode = "increase")
+    neg = predictor(model, negative, ref_latents = [reference_latent_0], ref_index_mode = "increase")
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng)
+    image = vae_decode(vae, dit_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return {image = image, latent = latent}
+}

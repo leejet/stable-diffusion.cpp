@@ -1,7 +1,10 @@
 #ifndef __SD_RUNTIME_DENOISER_HPP__
 #define __SD_RUNTIME_DENOISER_HPP__
 
+#include "core/option_types.h"
+
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -1382,10 +1385,14 @@ struct MingImageFlowDenoiser : DiscreteFlowDenoiser {
         return time_snr_shift(std::isfinite(shift) ? shift : resolution_shift, (t + 1.f) / 1000.f);
     }
 
-    std::vector<float> get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler, SDVersion version, const char* extra_sample_args = nullptr) override {
+    void set_sequence_length(int image_seq_len) {
         const float tokens = static_cast<float>(image_seq_len) / 4.f;
         const float mu     = tokens >= 4096.f ? 1.35f : 0.5f + (tokens - 256.f) * (1.15f - 0.5f) / (4096.f - 256.f);
         resolution_shift   = std::exp(mu);
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler, SDVersion version, const char* extra_sample_args = nullptr) override {
+        set_sequence_length(image_seq_len);
         if (scheduler != DISCRETE_SCHEDULER) {
             return DiscreteFlowDenoiser::get_sigmas(n, image_seq_len, scheduler, version, extra_sample_args);
         }
@@ -1395,12 +1402,44 @@ struct MingImageFlowDenoiser : DiscreteFlowDenoiser {
         const float factor = std::isfinite(shift) ? shift : resolution_shift;
         std::vector<float> sigmas;
         sigmas.reserve(n + 1);
+        // The upstream grid includes zero. Sample n positive points before appending the single terminal zero.
         for (uint32_t i = 0; i < n; ++i) {
-            const float t = n == 1 ? 1.f : 1.f - static_cast<float>(i) / static_cast<float>(n - 1);
+            const float t = 1.f - static_cast<float>(i) / static_cast<float>(n);
             sigmas.push_back(time_snr_shift(factor, t));
         }
-        // Upstream sets sigma_min to zero before linspace, then appends the terminal zero.
         sigmas.push_back(0.f);
+        return sigmas;
+    }
+};
+
+struct MiniMaxH3ImageDenoiser : public DiscreteFlowDenoiser {
+    std::array<float, 7> pdd_sigmas;
+
+    explicit MiniMaxH3ImageDenoiser(const std::array<float, 7>& pdd_sigmas)
+        : DiscreteFlowDenoiser(1.f), pdd_sigmas(pdd_sigmas) {}
+
+    float sigma_min() override { return 0.f; }
+    float sigma_max() override { return 1.f; }
+
+    float t_to_sigma(float t) override {
+        const float position = (1.f - std::clamp(t / (TIMESTEPS - 1.f), 0.f, 1.f)) * 6.f;
+        const size_t index   = std::min<size_t>(static_cast<size_t>(position), 5);
+        const auto& grid     = pdd_sigmas;
+        return grid[index] + (position - index) * (grid[index + 1] - grid[index]);
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler, SDVersion version, const char* extra_sample_args = nullptr) override {
+        if (scheduler != DISCRETE_SCHEDULER) {
+            return DiscreteFlowDenoiser::get_sigmas(n, image_seq_len, scheduler, version, extra_sample_args);
+        }
+        if (n == 0) {
+            return {};
+        }
+        std::vector<float> sigmas;
+        sigmas.reserve(n + 1);
+        for (uint32_t i = 0; i <= n; ++i) {
+            sigmas.push_back(t_to_sigma((1.f - static_cast<float>(i) / n) * (TIMESTEPS - 1.f)));
+        }
         return sigmas;
     }
 };
@@ -1449,6 +1488,29 @@ struct FluxFlowDenoiser : public DiscreteFlowDenoiser {
     float t_to_sigma(float t) override {
         t = t + 1;
         return flux_time_shift(shift, 1.0f, t / TIMESTEPS);
+    }
+};
+
+struct Flux3FlowDenoiser : public FluxFlowDenoiser {
+    float t_to_sigma(float t) override {
+        float u = (t + 1.f) / TIMESTEPS;
+        return shift * u / (1.f + (shift - 1.f) * u);
+    }
+
+    std::vector<float> get_sigmas(uint32_t n, int image_seq_len, scheduler_t scheduler_type, SDVersion version, const char* extra_sample_args = nullptr) override {
+        if (scheduler_type != DISCRETE_SCHEDULER) {
+            return Denoiser::get_sigmas(n, image_seq_len, scheduler_type, version, extra_sample_args);
+        }
+        if (n == 0) {
+            return {};
+        }
+        std::vector<float> sigmas;
+        sigmas.reserve(n + 1);
+        for (uint32_t i = 0; i <= n; ++i) {
+            float u = 1.f - static_cast<float>(i) / n;
+            sigmas.push_back(shift * u / (1.f + (shift - 1.f) * u));
+        }
+        return sigmas;
     }
 };
 

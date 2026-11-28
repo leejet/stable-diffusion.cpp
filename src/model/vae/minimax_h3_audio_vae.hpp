@@ -28,7 +28,7 @@ namespace MiniMaxH3 {
             auto alpha       = params["alpha"];
             auto oscillation = ggml_sin(ctx->ggml_ctx, ggml_mul(ctx->ggml_ctx, x, alpha));
             oscillation      = ggml_mul(ctx->ggml_ctx, oscillation, oscillation);
-            auto eps         = ggml_ext_scale(ctx->ggml_ctx, ggml_ext_ones(ctx->ggml_ctx, 1, 1, 1, 1), 1e-9f);
+            auto eps         = ggml_ext_scale(ctx, ggml_ext_ones(ctx, 1, 1, 1, 1), 1e-9f);
             return ggml_add(ctx->ggml_ctx,
                             x,
                             ggml_div(ctx->ggml_ctx, oscillation, ggml_add(ctx->ggml_ctx, alpha, eps)));
@@ -59,7 +59,7 @@ namespace MiniMaxH3 {
             auto h     = conv2->forward(ctx, act2->forward(ctx, conv1->forward(ctx, act1->forward(ctx, x))));
             if (x->ne[0] != h->ne[0]) {
                 int64_t pad = (x->ne[0] - h->ne[0]) / 2;
-                x           = ggml_ext_slice(ctx->ggml_ctx, x, 0, pad, x->ne[0] - pad);
+                x           = ggml_ext_slice(ctx, x, 0, pad, x->ne[0] - pad);
             }
             return ggml_add(ctx->ggml_ctx, x, h);
         }
@@ -76,10 +76,10 @@ namespace MiniMaxH3 {
             blocks["block.2"]   = std::make_shared<AudioEncoderResidualUnit>(in_channels, 9);
             blocks["block.3"]   = std::make_shared<AudioSnake1D>(in_channels);
             blocks["block.4"]   = std::make_shared<LTXV::Conv1D>(in_channels,
-                                                               out_channels,
-                                                               2 * stride,
-                                                               stride,
-                                                               static_cast<int>(std::ceil(stride / 2.f)));
+                                                                 out_channels,
+                                                                 2 * stride,
+                                                                 stride,
+                                                                 static_cast<int>(std::ceil(stride / 2.f)));
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
@@ -134,8 +134,8 @@ namespace MiniMaxH3 {
             auto w1   = std::dynamic_pointer_cast<Linear>(blocks["w1"]);
             auto w2   = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
             x         = norm->forward(ctx, x);
-            auto gate = ggml_ext_gelu(ctx->ggml_ctx, w0->forward(ctx, x), true);
-            return w2->forward(ctx, ggml_mul(ctx->ggml_ctx, gate, w1->forward(ctx, x)));
+            auto gate = w0->forward(ctx, x);
+            return w2->forward(ctx, ggml_geglu_split(ctx->ggml_ctx, gate, w1->forward(ctx, x)));
         }
     };
 
@@ -162,7 +162,7 @@ namespace MiniMaxH3 {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             auto qkv_layer  = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
             auto proj       = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
-            auto qkv        = ggml_ext_chunk(ctx->ggml_ctx, qkv_layer->forward(ctx, x), 3, 0);
+            auto qkv        = ggml_ext_chunk(ctx, qkv_layer->forward(ctx, x), 3, 0);
             auto bias_shape = [&](ggml_tensor* bias) {
                 return ggml_reshape_4d(ctx->ggml_ctx, bias, bias->ne[0], 1, 1, 1);
             };
@@ -171,9 +171,9 @@ namespace MiniMaxH3 {
             auto v = ggml_add(ctx->ggml_ctx, qkv[2], bias_shape(params["v_bias"]));
 
             int64_t sequence = x->ne[1];
-            auto mask        = ggml_diag_mask_inf(ctx->ggml_ctx,
-                                                  ggml_ext_zeros(ctx->ggml_ctx, sequence, sequence, 1, 1),
-                                                  0);
+            auto mask        = ggml_tri(ctx->ggml_ctx,
+                                        ggml_ext_full(ctx, -INFINITY, sequence, sequence, 1, 1),
+                                        GGML_TRI_TYPE_UPPER);
             auto attn_out    = ggml_ext_attention_ext(ctx,
                                                       q,
                                                       k,
@@ -300,12 +300,12 @@ namespace MiniMaxH3 {
             }
             blocks["activation_post"] = std::make_shared<LTXV::Activation1D>(channels);
             blocks["conv_post"]       = std::make_shared<LTXV::Conv1D>(channels,
-                                                                 1,
-                                                                 7,
-                                                                 1,
-                                                                 3,
-                                                                 1,
-                                                                 false);
+                                                                       1,
+                                                                       7,
+                                                                       1,
+                                                                       3,
+                                                                       1,
+                                                                       false);
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
@@ -323,7 +323,7 @@ namespace MiniMaxH3 {
                     auto value = block->forward(ctx, x);
                     sum        = sum == nullptr ? value : ggml_add(ctx->ggml_ctx, sum, value);
                 }
-                x = ggml_ext_scale(ctx->ggml_ctx, sum, 1.f / num_kernels);
+                x = ggml_ext_scale(ctx, sum, 1.f / num_kernels);
             }
             auto activation = std::dynamic_pointer_cast<LTXV::Activation1D>(blocks["activation_post"]);
             auto conv_post  = std::dynamic_pointer_cast<LTXV::Conv1D>(blocks["conv_post"]);
@@ -363,33 +363,22 @@ namespace MiniMaxH3 {
             auto pre       = std::dynamic_pointer_cast<AudioAttentionProjection>(blocks["pre_block"]);
             auto mean_proj = std::dynamic_pointer_cast<LTXV::Conv1D>(blocks["mean_proj"]);
 
-            // GGML's batched conv1d storage interleaves the stream dimension
-            // with output channels. Subsequent layers then read stereo samples
-            // as adjacent feature channels. Run each mono stream independently,
-            // matching PyTorch's reshape(B*S, 1, samples), and concatenate only
-            // the completed normalized latents.
             const int64_t streams = waveform->ne[2] * waveform->ne[3];
             waveform              = ggml_reshape_3d(ctx->ggml_ctx,
                                                     waveform,
                                                     waveform->ne[0],
                                                     1,
                                                     streams);
-            ggml_tensor* stereo_z = nullptr;
-            for (int64_t stream = 0; stream < streams; ++stream) {
-                auto mono = ggml_ext_slice(ctx->ggml_ctx, waveform, 2, stream, stream + 1);
-                auto x    = encoder->forward(ctx, mono);
-                x         = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));
-                x         = pre->forward(ctx, x);
-                x         = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));
-                auto z    = mean_proj->forward(ctx, x);
+            auto x                = encoder->forward(ctx, waveform);
+            x                     = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));
+            x                     = pre->forward(ctx, x);
+            x                     = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));
+            auto z                = mean_proj->forward(ctx, x);
 
-                auto mean = ggml_reshape_4d(ctx->ggml_ctx, params["latents_mean"], 1, kLatentChannels, 1, 1);
-                auto std  = ggml_reshape_4d(ctx->ggml_ctx, params["latents_std"], 1, kLatentChannels, 1, 1);
-                z         = ggml_div(ctx->ggml_ctx, ggml_sub(ctx->ggml_ctx, z, mean), std);
-                z         = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, z, 0, 2, 1, 3));
-                stereo_z  = stereo_z == nullptr ? z : ggml_concat(ctx->ggml_ctx, stereo_z, z, 1);
-            }
-            return stereo_z;
+            auto mean = ggml_reshape_4d(ctx->ggml_ctx, params["latents_mean"], 1, kLatentChannels, 1, 1);
+            auto std  = ggml_reshape_4d(ctx->ggml_ctx, params["latents_std"], 1, kLatentChannels, 1, 1);
+            z         = ggml_div(ctx->ggml_ctx, ggml_sub(ctx->ggml_ctx, z, mean), std);
+            return ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, z, 0, 2, 1, 3));
         }
 
         ggml_tensor* decode(GGMLRunnerContext* ctx, ggml_tensor* latent) {
@@ -423,7 +412,7 @@ namespace MiniMaxH3 {
                                                     streams);
             ggml_tensor* waveform = nullptr;
             for (int64_t stream = 0; stream < streams; ++stream) {
-                auto stream_latent   = ggml_ext_slice(ctx->ggml_ctx, latent, 2, stream, stream + 1);
+                auto stream_latent   = ggml_ext_slice(ctx, latent, 2, stream, stream + 1);
                 auto stream_waveform = decoder->forward(ctx, dec_in->forward(ctx, stream_latent));
                 waveform             = waveform == nullptr
                                            ? stream_waveform

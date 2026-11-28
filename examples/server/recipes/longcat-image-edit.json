@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "id": "longcat-image-edit",
+  "name": "LongCat Image Edit",
+  "description": "Supply reference images for editing.",
+  "model_url": "https://huggingface.co/meituan-longcat/LongCat-Image-Edit",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Qwen 2.5 VL 7B Text Encoder"
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "cfg_scale": 4.5,
+    "steps": 20,
+    "sampling_method": "euler"
+  },
+  "features": [
+    "flow_shift",
+    "img_cfg",
+    "ref_images",
+    "slg"
+  ]
+}

@@ -1,15 +1,18 @@
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
 
-#include "httplib.h"
+// cpp-httplib must include Winsock2 before other headers include windows.h.
+#include "server_access.h"
 
 #include "async_jobs.h"
 #include "common/common.h"
 #include "common/resource_owners.hpp"
+#include "model_catalog.h"
 #include "routes.h"
 #include "runtime.h"
 
@@ -38,6 +41,7 @@ static void parse_args(int argc,
         ctx_params.get_options(),
         default_gen_params.get_options(),
     };
+    svr_params.add_access_options(options_vec[0], options_vec);
 
     if (!parse_options(argc, argv, options_vec)) {
         print_usage(argv[0], options_vec);
@@ -47,19 +51,17 @@ static void parse_args(int argc,
     log_level = svr_params.log_level;
     log_color = svr_params.color;
 
-    const bool random_seed_requested = default_gen_params.seed < 0;
+    if (ctx_params.list_devices) {
+        exit(ctx_params.print_devices() ? 0 : 1);
+    }
 
     if (!svr_params.resolve_and_validate() ||
-        !ctx_params.resolve_and_validate(IMG_GEN) ||
+        !ctx_params.resolve_and_validate(ctx_params.model_path.empty() && ctx_params.diffusion_model_path.empty() ? METADATA : IMG_GEN) ||
         !default_gen_params.resolve_and_validate(IMG_GEN,
                                                  ctx_params.lora_model_dir,
                                                  ctx_params.hires_upscalers_dir)) {
         print_usage(argv[0], options_vec);
         exit(1);
-    }
-
-    if (random_seed_requested) {
-        default_gen_params.seed = -1;
     }
 }
 
@@ -75,6 +77,8 @@ int main(int argc, const char** argv) {
     }
     SDSvrParams svr_params;
     SDContextParams ctx_params;
+    // Preserve the CLI default while disabling cwd scans for sd-server.
+    ctx_params.lora_model_dir.clear();
     SDGenerationParams default_gen_params;
 
     sd_set_log_callback(sd_log_cb, (void*)&svr_params);
@@ -82,15 +86,28 @@ int main(int argc, const char** argv) {
 
     LOG_VERBOSE("version: %s", version_string().c_str());
     LOG_VERBOSE("%s", sd_get_system_info());
-    LOG_VERBOSE("%s", svr_params.to_string().c_str());
-    LOG_VERBOSE("%s", ctx_params.to_string().c_str());
-    LOG_VERBOSE("%s", default_gen_params.to_string().c_str());
+    LOG_DEBUG("%s", svr_params.to_string().c_str());
+    LOG_DEBUG("%s", ctx_params.to_string().c_str());
+    LOG_DEBUG("%s", default_gen_params.to_string().c_str());
 
-    sd_ctx_params_t sd_ctx_params = ctx_params.to_sd_ctx_params_t(false);
-    SDCtxPtr sd_ctx(new_sd_ctx(&sd_ctx_params));
+    if (!ctx_params.register_rpc_devices()) {
+        return 1;
+    }
+    ctx_params.rpc_servers.reset();
 
-    if (sd_ctx == nullptr) {
-        LOG_ERROR("new_sd_ctx_t failed");
+    SDOptPtr sd_ctx_params = ctx_params.to_context_opt();
+    ServerModels models;
+    models.context.reset(create_sd_context(sd_ctx_params));
+    if (!models.context) {
+        LOG_ERROR("sd_ctx_create failed: %s", sd_get_last_error());
+        return 1;
+    }
+    try {
+        configure_server_file_access(models, svr_params, ctx_params);
+        if (!sd_dgl_ctx_set(sd_ctx_get_dgl_ctx(models.context.get()), "console_progress", "on"))
+            throw std::runtime_error(sd_dgl_error());
+    } catch (const std::exception& error) {
+        LOG_ERROR("Context setup failed: %s", error.what());
         return 1;
     }
 
@@ -101,8 +118,12 @@ int main(int argc, const char** argv) {
     std::vector<UpscalerEntry> upscaler_cache;
     std::mutex upscaler_mutex;
     AsyncJobManager async_job_manager;
+    async_job_manager.max_pending_jobs =
+        static_cast<size_t>(svr_params.max_pending_jobs);
+    async_job_manager.completed_ttl_seconds =
+        static_cast<int64_t>(svr_params.completed_ttl_seconds);
     ServerRuntime runtime = {
-        sd_ctx.get(),
+        models.context.get(),
         &sd_ctx_mutex,
         &svr_params,
         &ctx_params,
@@ -112,28 +133,19 @@ int main(int argc, const char** argv) {
         &upscaler_cache,
         &upscaler_mutex,
         &async_job_manager,
+        &models,
     };
+
+    try {
+        initialize_server_models(runtime);
+    } catch (const std::exception& e) {
+        LOG_ERROR("model catalog initialization failed: %s", e.what());
+        return 1;
+    }
 
     std::thread async_worker(async_job_worker, std::ref(runtime));
 
-    httplib::Server svr;
-
-    svr.set_pre_routing_handler([](const httplib::Request& req, httplib::Response& res) {
-        std::string origin = req.get_header_value("Origin");
-        if (origin.empty()) {
-            origin = "*";
-        }
-        res.set_header("Access-Control-Allow-Origin", origin);
-        res.set_header("Access-Control-Allow-Credentials", "true");
-        res.set_header("Access-Control-Allow-Methods", "*");
-        res.set_header("Access-Control-Allow-Headers", "*");
-
-        if (req.method == "OPTIONS") {
-            res.status = 204;
-            return httplib::Server::HandlerResponse::Handled;
-        }
-        return httplib::Server::HandlerResponse::Unhandled;
-    });
+    SDHttpServer svr(svr_params);
 
     std::string index_html;
 #ifdef HAVE_INDEX_HTML
@@ -142,9 +154,12 @@ int main(int argc, const char** argv) {
     index_html = "Stable Diffusion Server is running";
 #endif
     register_index_endpoints(svr, svr_params, index_html);
+    register_media_view_endpoint(svr, svr_params.media_view, models.workspace_file_access.output);
     register_openai_api_endpoints(svr, runtime);
     register_sdapi_endpoints(svr, runtime);
     register_sdcpp_api_endpoints(svr, runtime);
+    register_dgl_endpoints(svr, runtime);
+    register_model_endpoints(svr, runtime);
 
     LOG_INFO("listening on: http://%s:%d\n", svr_params.listen_ip.c_str(), svr_params.listen_port);
     svr.listen(svr_params.listen_ip, svr_params.listen_port);

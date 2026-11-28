@@ -71,7 +71,7 @@ const float qwen21_latent_rgb_proj[64][3] = {
     {-0.01036656294f, -0.00422146068f, -0.0213499052f},
     {0.01788952706f, 0.01191944190f, 0.0397205238f},
 };
-float qwen21_latent_rgb_bias[3] = {-0.043293118f, -0.02695978f, -0.11986706f};
+inline float qwen21_latent_rgb_bias[3] = {-0.043293118f, -0.02695978f, -0.11986706f};
 
 const float qwen21_latent_alpha_proj[64] = {
     -0.0416241114f, -0.00678954612f, -0.0169095515f, -0.0230551401f, 0.0100882595f, 0.00655586802f, 0.0401166874f, -0.0055510216f,
@@ -109,7 +109,7 @@ const float minimax_latent_rgb_proj[24][3] = {
     {0.01495088f, 0.00292306f, 0.00416671f},
     {0.00495307f, 0.05066542f, 0.05210543f},
     {-0.02154842f, -0.01518524f, 0.00442402f}};
-float minimax_latent_rgb_bias[3] = {0.07776964f, -0.01580954f, -0.06561434f};
+inline float minimax_latent_rgb_bias[3] = {0.07776964f, -0.01580954f, -0.06561434f};
 
 const float ltxav_latent_rgb_proj[128][3] = {
     {-0.0293802f, -0.0362516f, -0.0291386f},
@@ -241,7 +241,7 @@ const float ltxav_latent_rgb_proj[128][3] = {
     {0.00695946f, 0.00313109f, -0.00379435f},
     {0.0188377f, 0.0144059f, 0.0229724f},
 };
-float ltxav_latent_rgb_bias[3] = {0.043849f, 0.0201085f, 0.0150286f};
+inline float ltxav_latent_rgb_bias[3] = {0.043849f, 0.0201085f, 0.0150286f};
 
 const float wan_21_latent_rgb_proj[16][3] = {
     {0.015123f, -0.148418f, 0.479828f},
@@ -260,7 +260,7 @@ const float wan_21_latent_rgb_proj[16][3] = {
     {0.014307f, -0.048647f, -0.007219f},
     {0.217150f, 0.053074f, 0.319923f},
     {0.155357f, 0.083156f, 0.064780f}};
-float wan_21_latent_rgb_bias[3] = {-0.270270f, -0.234976f, -0.456853f};
+inline float wan_21_latent_rgb_bias[3] = {-0.270270f, -0.234976f, -0.456853f};
 
 const float wan_22_latent_rgb_proj[48][3] = {
     {0.017126f, -0.027230f, -0.019257f},
@@ -311,7 +311,7 @@ const float wan_22_latent_rgb_proj[48][3] = {
     {0.009424f, 0.013088f, -0.001714f},
     {-0.024805f, -0.059378f, -0.033756f},
     {-0.078293f, 0.029070f, 0.026129f}};
-float wan_22_latent_rgb_bias[3] = {0.013160f, -0.096492f, -0.071323f};
+inline float wan_22_latent_rgb_bias[3] = {0.013160f, -0.096492f, -0.071323f};
 
 const float flux_latent_rgb_proj[16][3] = {
     {-0.041168f, 0.019917f, 0.097253f},
@@ -330,7 +330,7 @@ const float flux_latent_rgb_proj[16][3] = {
     {-0.143501f, 0.018263f, -0.136138f},
     {-0.025767f, -0.082035f, -0.040023f},
     {-0.111849f, -0.055589f, -0.032361f}};
-float flux_latent_rgb_bias[3] = {0.024600f, -0.006937f, -0.008089f};
+inline float flux_latent_rgb_bias[3] = {0.024600f, -0.006937f, -0.008089f};
 
 const float flux2_latent_rgb_proj[32][3] = {
     {0.000736f, -0.008385f, -0.019710f},
@@ -365,7 +365,7 @@ const float flux2_latent_rgb_proj[32][3] = {
     {-0.034560f, -0.008740f, 0.012996f},
     {0.000166f, 0.001079f, -0.012153f},
     {0.017772f, 0.000937f, -0.011953f}};
-float flux2_latent_rgb_bias[3] = {-0.028738f, -0.098463f, -0.107619f};
+inline float flux2_latent_rgb_bias[3] = {-0.028738f, -0.098463f, -0.107619f};
 
 // This one was taken straight from
 // https://github.com/Stability-AI/sd3.5/blob/8565799a3b41eb0c7ba976d18375f0f753f56402/sd3_impls.py#L288-L303
@@ -388,23 +388,23 @@ const float sd3_latent_rgb_proj[16][3] = {
     {-0.0749f, -0.0634f, -0.0456f},
     {-0.1418f, -0.1457f, -0.1259f},
 };
-float sd3_latent_rgb_bias[3] = {0, 0, 0};
+inline float sd3_latent_rgb_bias[3] = {0, 0, 0};
 
 const float sdxl_latent_rgb_proj[4][3] = {
     {0.258303f, 0.277640f, 0.329699f},
     {-0.299701f, 0.105446f, 0.014194f},
     {0.050522f, 0.186163f, -0.143257f},
     {-0.211938f, -0.149892f, -0.080036f}};
-float sdxl_latent_rgb_bias[3] = {0.144381f, -0.033313f, 0.007061f};
+inline float sdxl_latent_rgb_bias[3] = {0.144381f, -0.033313f, 0.007061f};
 
 const float sd_latent_rgb_proj[4][3] = {
     {0.337366f, 0.216344f, 0.257386f},
     {0.165636f, 0.386828f, 0.046994f},
     {-0.267803f, 0.237036f, 0.223517f},
     {-0.178022f, -0.200862f, -0.678514f}};
-float sd_latent_rgb_bias[3] = {-0.017478f, -0.055834f, -0.105825f};
+inline float sd_latent_rgb_bias[3] = {-0.017478f, -0.055834f, -0.105825f};
 
-void preview_latent_video(uint8_t* buffer, ggml_tensor* latents, const float (*latent_rgb_proj)[3], const float latent_rgb_bias[3], int patch_size, const float* latent_alpha_proj = nullptr, float latent_alpha_bias = 1.f) {
+inline void preview_latent_video(uint8_t* buffer, ggml_tensor* latents, const float (*latent_rgb_proj)[3], const float latent_rgb_bias[3], int patch_size, const float* latent_alpha_proj = nullptr, float latent_alpha_bias = 1.f) {
     size_t buffer_head = 0;
 
     uint32_t latent_width  = static_cast<uint32_t>(latents->ne[0]);
@@ -486,7 +486,7 @@ static inline bool preview_latent_tensor_is_video(const sd::Tensor<float>& laten
     return latents.dim() == 5;
 }
 
-void preview_latent_video(uint8_t* buffer, const sd::Tensor<float>& latents, const float (*latent_rgb_proj)[3], const float latent_rgb_bias[3], int patch_size, const float* latent_alpha_proj = nullptr, float latent_alpha_bias = 1.f) {
+inline void preview_latent_video(uint8_t* buffer, const sd::Tensor<float>& latents, const float (*latent_rgb_proj)[3], const float latent_rgb_bias[3], int patch_size, const float* latent_alpha_proj = nullptr, float latent_alpha_bias = 1.f) {
     uint32_t latent_width  = static_cast<uint32_t>(latents.shape()[0]);
     uint32_t latent_height = static_cast<uint32_t>(latents.shape()[1]);
     bool is_video          = preview_latent_tensor_is_video(latents);

@@ -4,14 +4,173 @@
 
 #include "core/ggml_extend.h"
 #include "core/ggml_extend_backend.h"
+#include "core/ggml_extensions.h"
+#include "core/ggml_runner.h"
+#include "core/util.h"
 
-ggml_tensor* ggml_ext_merge_lora(ggml_context* ctx,
+ggml_tensor* build_lora_int8_merge(ggml_context* ctx, ggml_tensor* weight, const LoraInt8Weight& layout, ggml_tensor* diff) {
+#ifndef SD_USE_UPSTREAM_GGML
+    ggml_tensor* inputs[] = {weight, layout.scale, diff};
+    const int32_t group   = layout.convrot_group;
+    return ggml_ext_op_create(ctx, sd_ggml_i8_lora_merge_op(), inputs, 3, &group);
+#else
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(weight);
+    GGML_UNUSED(layout);
+    GGML_UNUSED(diff);
+    return nullptr;
+#endif
+}
+
+#ifndef SD_USE_UPSTREAM_GGML
+static ggml_tensor* lora_storage_view(ggml_context* ctx, ggml_tensor* tensor, size_t bytes, size_t offset, ggml_type type) {
+    // Reinterpret the range as integers so CPY preserves weight and scale bits.
+    const size_t stride = ggml_type_size(type);
+    auto* view          = ggml_view_1d(ctx, tensor, bytes / ggml_type_size(tensor->type), offset);
+    view->type          = type;
+    view->ne[0]         = bytes / stride;
+    view->nb[0]         = stride;
+    view->nb[1] = view->nb[2] = view->nb[3] = bytes;
+    return view;
+}
+
+static void copy_packed_lora_result(ggml_tensor* target, ggml_tensor* packed, size_t offset) {
+    ggml_tensor view = *target;
+    view.view_src    = packed;
+    view.view_offs   = offset;
+    view.buffer      = packed->buffer;
+    view.data        = static_cast<char*>(packed->data) + offset;
+    view.extra       = packed->extra;
+    ggml_backend_tensor_copy(&view, target);
+}
+
+static uint32_t lora_int8_merge_flags(const ggml_tensor* status) {
+    uint32_t flags;
+    ggml_backend_tensor_get(status, &flags, 0, sizeof(flags));
+    return flags;
+}
+
+static bool lora_int8_merge_valid(const ggml_tensor* weight, uint32_t flags) {
+    if (flags & SD_I8_LORA_NONFINITE) {
+        LOG_ERROR("non-finite INT8 LoRA merge for '%s'", ggml_get_name(weight));
+        return false;
+    }
+    return true;
+}
+#endif
+
+ggml_tensor* append_lora_int8_writeback(ggml_context* ctx, ggml_cgraph* graph, ggml_backend_t backend, ggml_tensor* weight, const LoraInt8Weight& layout, ggml_tensor* packed) {
+#ifndef SD_USE_UPSTREAM_GGML
+    SDI8LoRAMerge op;
+    if (!sd_ggml_i8_lora_merge_describe(packed, &op))
+        return nullptr;
+    auto copy = [&](ggml_tensor* target, size_t offset) {
+        const auto bytes = ggml_nbytes(target);
+        const auto type  = bytes % sizeof(uint32_t) == 0 && offset % sizeof(uint32_t) == 0 &&
+                                   target->view_offs % sizeof(uint32_t) == 0 && uintptr_t(target->data) % sizeof(uint32_t) == 0
+                               ? GGML_TYPE_I32
+                               : GGML_TYPE_I8;
+        return ggml_cpy(ctx, lora_storage_view(ctx, packed, bytes, offset, type),
+                        lora_storage_view(ctx, target, bytes, 0, type));
+    };
+    auto* status  = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1);
+    auto* weights = copy(weight, op.weight_offset());
+    auto* scales  = copy(layout.scale, op.scale_offset());
+    auto* flags   = ggml_cpy(ctx, lora_storage_view(ctx, packed, sizeof(uint32_t), 0, GGML_TYPE_I32), status);
+    if (!ggml_backend_supports_op(backend, weights) || !ggml_backend_supports_op(backend, scales) ||
+        !ggml_backend_supports_op(backend, flags))
+        return nullptr;
+
+    ggml_set_output(status);
+    ggml_build_forward_expand(graph, flags);
+    ggml_build_forward_expand(graph, scales);
+    ggml_build_forward_expand(graph, weights);
+    return status;
+#else
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(graph);
+    GGML_UNUSED(backend);
+    GGML_UNUSED(weight);
+    GGML_UNUSED(layout);
+    GGML_UNUSED(packed);
+    return nullptr;
+#endif
+}
+
+bool check_lora_int8_merge(const ggml_tensor* weight, const ggml_tensor* status) {
+#ifndef SD_USE_UPSTREAM_GGML
+    return lora_int8_merge_valid(weight, lora_int8_merge_flags(status));
+#else
+    GGML_UNUSED(weight);
+    GGML_UNUSED(status);
+    return false;
+#endif
+}
+
+bool commit_lora_int8_merge(ggml_tensor* weight, const LoraInt8Weight& layout, ggml_tensor* packed) {
+#ifndef SD_USE_UPSTREAM_GGML
+    SDI8LoRAMerge op;
+    if (!sd_ggml_i8_lora_merge_describe(packed, &op))
+        return false;
+    const auto flags = lora_int8_merge_flags(packed);
+    if (!lora_int8_merge_valid(weight, flags))
+        return false;
+    if (flags & SD_I8_LORA_CHANGED) {
+        copy_packed_lora_result(weight, packed, op.weight_offset());
+        copy_packed_lora_result(layout.scale, packed, op.scale_offset());
+    }
+    return true;
+#else
+    GGML_UNUSED(weight);
+    GGML_UNUSED(layout);
+    GGML_UNUSED(packed);
+    return false;
+#endif
+}
+
+ggml_tensor* ggml_ext_mul_n_mode(GGMLRunnerContext* runner_ctx, ggml_tensor* a, ggml_tensor* b, int mode) {
+    auto ctx = runner_ctx->ggml_ctx;
+    // reshape A
+    // swap 0th and nth axis
+    a           = ggml_cont(ctx, ggml_permute(ctx, a, mode, mode != 1 ? 1 : 0, mode != 2 ? 2 : 0, mode != 3 ? 3 : 0));
+    int64_t ne1 = a->ne[1];
+    int64_t ne2 = a->ne[2];
+    int64_t ne3 = a->ne[3];
+    // make 2D
+    a = ggml_cont(ctx, ggml_reshape_2d(ctx, a, a->ne[0], (ne3 * ne2 * ne1)));
+
+    ggml_tensor* result = ggml_cont(ctx, ggml_transpose(ctx, ggml_mul_mat(ctx, a, b)));
+
+    // reshape output (same shape as a after permutation except first dim)
+    result = ggml_reshape_4d(ctx, result, result->ne[0], ne1, ne2, ne3);
+    // swap back 0th and nth axis
+    result = ggml_permute(ctx, result, mode, mode != 1 ? 1 : 0, mode != 2 ? 2 : 0, mode != 3 ? 3 : 0);
+    return result;
+}
+
+ggml_tensor* ggml_ext_kronecker(GGMLRunnerContext* runner_ctx, ggml_tensor* a, ggml_tensor* b) {
+    auto ctx = runner_ctx->ggml_ctx;
+    return ggml_mul(ctx,
+                    ggml_interpolate(ctx,
+                                     a,
+                                     a->ne[0] * b->ne[0],
+                                     a->ne[1] * b->ne[1],
+                                     a->ne[2] * b->ne[2],
+                                     a->ne[3] * b->ne[3],
+                                     GGML_SCALE_MODE_NEAREST),
+                    b);
+}
+
+ggml_tensor* ggml_ext_merge_lora(GGMLRunnerContext* runner_ctx,
                                  ggml_tensor* lora_down,
                                  ggml_tensor* lora_up,
                                  ggml_tensor* lora_mid) {
+    auto ctx = runner_ctx->ggml_ctx;
     ggml_tensor* updown;
     // flat lora tensors to multiply it
-    int64_t lora_up_rows  = lora_up->ne[ggml_n_dims(lora_up) - 1];
+    // ggml_n_dims drops the output dimension when a linear layer has one output.
+    int lora_up_n_dims    = ggml_n_dims(lora_up);
+    int64_t lora_up_rows  = lora_up_n_dims == 1 ? 1 : lora_up->ne[lora_up_n_dims - 1];
     lora_up               = ggml_reshape_2d(ctx, lora_up, ggml_nelements(lora_up) / lora_up_rows, lora_up_rows);
     auto lora_down_n_dims = ggml_n_dims(lora_down);
     // assume n_dims should always be a multiple of 2 (otherwise rank 1 doesn't work)
@@ -30,25 +189,25 @@ ggml_tensor* ggml_ext_merge_lora(ggml_context* ctx,
         // lora_down has shape (Rank, In,  1,    1)
         // lora_up   has shape (Rank, Out, 1,    1)
         // conv layer shape is (3,    3,   Out,  In)
-        updown = ggml_ext_mul_n_mode(ctx, ggml_ext_mul_n_mode(ctx, lora_mid, lora_down, 3), lora_up, 2);
+        updown = ggml_ext_mul_n_mode(runner_ctx, ggml_ext_mul_n_mode(runner_ctx, lora_mid, lora_down, 3), lora_up, 2);
         updown = ggml_cont(ctx, updown);
     }
     return updown;
 }
 
-ggml_tensor* ggml_ext_lokr_forward(
-    ggml_context* ctx,
-    ggml_backend_t backend,
-    ggml_tensor* h,    // Input: [q, batch] or [W, H, q, batch]
-    ggml_tensor* w1,   // Outer C (Full rank)
-    ggml_tensor* w1a,  // Outer A (Low rank part 1)
-    ggml_tensor* w1b,  // Outer B (Low rank part 2)
-    ggml_tensor* w2,   // Inner BA (Full rank)
-    ggml_tensor* w2a,  // Inner A (Low rank part 1)
-    ggml_tensor* w2b,  // Inner B (Low rank part 2)
-    bool is_conv,
-    WeightAdapter::ForwardParams::conv2d_params_t conv_params,
-    float scale) {
+ggml_tensor* ggml_ext_lokr_forward(GGMLRunnerContext* runner_ctx,
+                                   ggml_tensor* h,    // Input: [q, batch] or [W, H, q, batch]
+                                   ggml_tensor* w1,   // Outer C (Full rank)
+                                   ggml_tensor* w1a,  // Outer A (Low rank part 1)
+                                   ggml_tensor* w1b,  // Outer B (Low rank part 2)
+                                   ggml_tensor* w2,   // Inner BA (Full rank)
+                                   ggml_tensor* w2a,  // Inner A (Low rank part 1)
+                                   ggml_tensor* w2b,  // Inner B (Low rank part 2)
+                                   bool is_conv,
+                                   WeightAdapter::ForwardParams::conv2d_params_t conv_params,
+                                   float scale) {
+    auto ctx     = runner_ctx->ggml_ctx;
+    auto backend = runner_ctx->backend;
     GGML_ASSERT((w1 != nullptr || (w1a != nullptr && w1b != nullptr)));
     GGML_ASSERT((w2 != nullptr || (w2a != nullptr && w2b != nullptr)));
 
@@ -71,7 +230,6 @@ ggml_tensor* ggml_ext_lokr_forward(
 
         if (sd_backend_is(backend, "Vulkan")) {
             if (batch > 1) {
-                // no access to backend here, worst case is slightly worse perfs for other backends when built alongside Vulkan backend
                 int max_batch    = 65535;
                 int max_batch_uq = max_batch / uq;
                 merge_batch_uq   = 1;
@@ -119,14 +277,14 @@ ggml_tensor* ggml_ext_lokr_forward(
 
         ggml_tensor* hc  = ggml_transpose(ctx, hc_t);
         ggml_tensor* out = ggml_reshape_2d(ctx, ggml_cont(ctx, hc), up * vp, batch);
-        return ggml_ext_scale(ctx, out, scale);
+        return ggml_ext_scale(runner_ctx, out, scale);
     } else {
         int batch = (int)h->ne[3];
         // 1. Reshape input: [W, H, vq*uq, batch] -> [W, H, vq, uq * batch]
         ggml_tensor* h_split = ggml_reshape_4d(ctx, h, h->ne[0], h->ne[1], vq, uq * batch);
 
         if (w2 != nullptr) {
-            hb = ggml_ext_conv_2d(ctx, h_split, w2, nullptr,
+            hb = ggml_ext_conv_2d(runner_ctx, h_split, w2, nullptr,
                                   conv_params.s0,
                                   conv_params.s1,
                                   conv_params.p0,
@@ -152,7 +310,7 @@ ggml_tensor* ggml_ext_lokr_forward(
                 GGML_ASSERT(k * k * h_split->ne[2] == a->ne[2]);
                 a = ggml_reshape_4d(ctx, a, a->ne[0] * k, a->ne[1] * k, a->ne[2] / (k * k), a->ne[3]);
             }
-            ggml_tensor* ha = ggml_ext_conv_2d(ctx, h_split, a, nullptr,
+            ggml_tensor* ha = ggml_ext_conv_2d(runner_ctx, h_split, a, nullptr,
                                                conv_params.s0,
                                                conv_params.s1,
                                                conv_params.p0,
@@ -165,8 +323,7 @@ ggml_tensor* ggml_ext_lokr_forward(
                                                conv_params.scale);
 
             // not supporting lora_mid here
-            hb = ggml_ext_conv_2d(ctx,
-                                  ha,
+            hb = ggml_ext_conv_2d(runner_ctx, ha,
                                   b,
                                   nullptr,
                                   1,
@@ -202,6 +359,6 @@ ggml_tensor* ggml_ext_lokr_forward(
         ggml_tensor* hc = ggml_transpose(ctx, hc_t);
         // ungroup
         ggml_tensor* out = ggml_reshape_4d(ctx, ggml_cont(ctx, hc), w_out, h_out, up * vp, batch);
-        return ggml_ext_scale(ctx, out, scale);
+        return ggml_ext_scale(runner_ctx, out, scale);
     }
 }

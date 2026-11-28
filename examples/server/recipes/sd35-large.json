@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "id": "sd35-large",
+  "name": "SD 3.5 Large",
+  "model_url": "https://huggingface.co/stabilityai/stable-diffusion-3.5-large",
+  "slots": [
+    {
+      "id": "model",
+      "required": true
+    },
+    {
+      "id": "clip_l",
+      "required": true
+    },
+    {
+      "id": "clip_g",
+      "required": true
+    },
+    {
+      "id": "t5xxl",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "cfg_scale": 3.5,
+    "steps": 20,
+    "width": 1024,
+    "height": 1024
+  },
+  "features": [
+    "clip_skip",
+    "flow_shift",
+    "slg"
+  ]
+}

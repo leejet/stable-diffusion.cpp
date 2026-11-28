@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <locale>
 #include <regex>
@@ -16,6 +17,7 @@
 #include <unordered_set>
 #include <vector>
 #include "core/ggml_tensor_utils.h"
+#include "core/option_types.h"
 #include "runtime/preprocessing.hpp"
 
 #if defined(__APPLE__) && defined(__MACH__)
@@ -60,6 +62,21 @@ void replace_all_chars(std::string& str, char target, char replacement) {
             str[i] = replacement;
         }
     }
+}
+
+std::string escape_newlines(const std::string& text) {
+    std::string escaped;
+    escaped.reserve(text.size());
+    for (char ch : text) {
+        if (ch == '\n') {
+            escaped += "\\n";
+        } else if (ch == '\r') {
+            escaped += "\\r";
+        } else {
+            escaped += ch;
+        }
+    }
+    return escaped;
 }
 
 static std::string sd_vformat(const char* fmt, va_list ap) {
@@ -108,12 +125,12 @@ int round_up_to(int value, int base) {
 #include <windows.h>
 
 bool file_exists(const std::string& filename) {
-    DWORD attributes = GetFileAttributesA(filename.c_str());
+    DWORD attributes = GetFileAttributesW(std::filesystem::u8path(filename).c_str());
     return (attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY));
 }
 
 bool is_directory(const std::string& path) {
-    DWORD attributes = GetFileAttributesA(path.c_str());
+    DWORD attributes = GetFileAttributesW(std::filesystem::u8path(path).c_str());
     return (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY));
 }
 
@@ -137,8 +154,8 @@ std::unique_ptr<MmapWrapper> MmapWrapper::create(const std::string& filename, bo
     void* mapped_data = nullptr;
     size_t file_size  = 0;
 
-    HANDLE file_handle = CreateFileA(
-        filename.c_str(),
+    HANDLE file_handle = CreateFileW(
+        std::filesystem::u8path(filename).c_str(),
         GENERIC_READ,
         FILE_SHARE_READ,
         nullptr,
@@ -327,7 +344,7 @@ int32_t sd_get_num_physical_cores() {
     // enumerate the set of thread siblings, num entries is num cores
     std::unordered_set<std::string> siblings;
     for (uint32_t cpu = 0; cpu < UINT32_MAX; ++cpu) {
-        std::ifstream thread_siblings("/sys/devices/system/cpu" + std::to_string(cpu) + "/topology/thread_siblings");
+        std::ifstream thread_siblings("/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/thread_siblings");
         if (!thread_siblings.is_open()) {
             break;  // no more cpus
         }
@@ -360,12 +377,13 @@ int32_t sd_get_num_physical_cores() {
 static sd_progress_cb_t sd_progress_cb = nullptr;
 void* sd_progress_cb_data              = nullptr;
 
-static sd_preview_cb_t sd_preview_cb = nullptr;
-static void* sd_preview_cb_data      = nullptr;
-preview_t sd_preview_mode            = PREVIEW_NONE;
-int sd_preview_interval              = 1;
-bool sd_preview_denoised             = true;
-bool sd_preview_noisy                = false;
+static sd_preview_info_t sd_preview_info = {};
+static sd_preview_cb_t sd_preview_cb     = nullptr;
+static void* sd_preview_cb_data          = nullptr;
+preview_t sd_preview_mode                = PREVIEW_NONE;
+int sd_preview_interval                  = 1;
+bool sd_preview_denoised                 = true;
+bool sd_preview_noisy                    = false;
 
 static sd_graph_eval_callback_t sd_backend_eval_cb = nullptr;
 static void* sd_backend_eval_cb_data               = nullptr;
@@ -551,32 +569,26 @@ bool parse_strict_bool(const std::string& text, bool& value) {
 }
 
 static std::string build_progress_bar(int step, int steps, char progress_char = '=', bool show_head = true) {
-    std::string progress = "  |";
-    int max_progress     = 50;
-    int32_t current      = 0;
+    std::string progress       = "  |";
+    constexpr int max_progress = 50;
+    int32_t current            = 0;
     if (steps > 0) {
-        current = (int32_t)(step * 1.f * max_progress / steps);
+        current = (int32_t)(std::clamp(step, 0, steps) * 1.f * max_progress / steps);
     }
-    for (int i = 0; i < 50; i++) {
-        if (i > current) {
-            progress += " ";
-        } else if (show_head && i == current && i != max_progress - 1) {
-            progress += ">";
-        } else {
-            progress += progress_char;
-        }
-    }
-    progress += "|";
+    int head_length = (current == max_progress) ? 0 : 1;
+    progress += std::string(current, progress_char) + std::string(head_length, show_head ? '>' : progress_char) + std::string(max_progress - current - head_length, ' ') + "|";
     return progress;
 }
 
-static void print_progress_line(int step, int steps, const std::string& speed_text, char progress_char = '=', bool show_head = true) {
+static void print_progress_line(int step, int steps, const std::string& speed_text, char progress_char = '=', bool show_head = true, const std::string& eta_text = "") {
     if (step == 0) {
         return;
     }
     std::string progress = build_progress_bar(step, steps, progress_char, show_head);
+    int step_width       = static_cast<int>(std::to_string(steps).size());
     const char* lf       = (step == steps ? "\n" : "");
-    printf("\r%s %i/%i - %s\033[K%s", progress.c_str(), step, steps, speed_text.c_str(), lf);
+    printf("\r%s %*i/%i - %10s%s%s\033[K%s", progress.c_str(), step_width, step, steps, speed_text.c_str(),
+           eta_text.empty() ? "" : " - ETA ", eta_text.c_str(), lf);
     fflush(stdout);  // for linux
 }
 
@@ -585,8 +597,26 @@ void pretty_progress(int step, int steps, float time) {
         sd_progress_cb(step, steps, time, sd_progress_cb_data);
         return;
     }
+    pretty_console_progress(step, steps, time);
+}
+
+void pretty_console_progress(int step, int steps, float time) {
+    static thread_local int show_eta      = -1;  // -1 - estimate duration, 0 - hide, 1 - show
+    static thread_local float passed_time = 0.f;
     if (step == 0) {
+        show_eta    = -1;  // reinitialize for batch generations
+        passed_time = 0.f;
         return;
+    }
+    std::string remainder_text = "";
+    if (show_eta && step < steps) {                                     // if timer is not disabled and bar is not filled,
+        if (show_eta == -1 && step)                                     // estimate the total time once, then
+            show_eta = (std::abs(time * steps / step) < 15.f) ? 0 : 1;  // hide the timer if total is less than 15 seconds
+        if (show_eta) {
+            unsigned remainder = (passed_time += time) / step * (steps - step);  // average speed; time*(steps-step) for current
+            remainder_text     = remainder < 3600 ? sd_format("%02u:%02u", remainder / 60, remainder % 60)
+                                                  : sd_format("%u:%02u:%02u", remainder / 3600, (remainder / 60) % 60, remainder % 60);
+        }
     }
     const char* unit = "s/it";
     float speed      = time;
@@ -594,11 +624,40 @@ void pretty_progress(int step, int steps, float time) {
         speed = 1.0f / speed;
         unit  = "it/s";
     }
-    print_progress_line(step, steps, sd_format("%.2f%s", speed, unit));
+    print_progress_line(step, steps, sd_format("%.2f%s", speed, unit), '=', true, remainder_text);
+}
+
+static thread_local void (*byte_progress_callback)(int, int, void*) = nullptr;
+static thread_local void* byte_progress_data                        = nullptr;
+static thread_local bool byte_progress_console                      = false;
+
+sd::ByteProgressConsoleScope::ByteProgressConsoleScope(bool enabled)
+    : previous_(byte_progress_console) {
+    byte_progress_console = enabled;
+}
+
+sd::ByteProgressConsoleScope::~ByteProgressConsoleScope() {
+    byte_progress_console = previous_;
+}
+
+sd::ByteProgressScope::ByteProgressScope(Callback callback, void* data)
+    : previous_callback_(byte_progress_callback), previous_data_(byte_progress_data) {
+    byte_progress_callback = callback;
+    byte_progress_data     = data;
+}
+
+sd::ByteProgressScope::~ByteProgressScope() {
+    byte_progress_callback = previous_callback_;
+    byte_progress_data     = previous_data_;
 }
 
 void pretty_bytes_progress(int step, int steps, uint64_t bytes_processed, float elapsed_seconds) {
-    if (sd_progress_cb) {
+    if (byte_progress_callback) {
+        byte_progress_callback(step, steps, byte_progress_data);
+        if (!byte_progress_console)
+            return;
+    }
+    if (!byte_progress_console && sd_progress_cb) {
         float time = elapsed_seconds / (step + 1e-6f);
         sd_progress_cb(step, steps, time, sd_progress_cb_data);
         return;
@@ -644,9 +703,14 @@ void* sd_log_cb_data         = nullptr;
 static void sd_log_dispatch(sd_log_level_t level, const std::string& origin, const std::string& text) {
     if (sd_log_cb == nullptr)
         return;
-    std::string message = origin + " - " + text;
-    if (message.back() != '\n') {
-        message += '\n';
+    std::string message = text;
+    while (!message.empty() && (message.back() == '\n' || message.back() == '\r')) {
+        message.pop_back();
+    }
+    if (origin == "ggml") {
+        message = origin + ": " + message + '\n';
+    } else {
+        message += " --- " + origin + '\n';
     }
     sd_log_cb(level, message.c_str(), sd_log_cb_data);
 }
@@ -656,7 +720,7 @@ void log_printf(sd_log_level_t level, const char* file, int line, const char* fo
     va_start(args, format);
     std::string message = sd_vformat(format, args);
     va_end(args);
-    std::string origin = sd_format("%s:%-4d", sd_basename(file).c_str(), line);
+    std::string origin = sd_format("%s:%d", sd_basename(file).c_str(), line);
     sd_log_dispatch(level, origin, message);
 }
 
@@ -690,7 +754,8 @@ void sd_set_progress_callback(sd_progress_cb_t cb, void* data) {
     sd_progress_cb      = cb;
     sd_progress_cb_data = data;
 }
-void sd_set_preview_callback(sd_preview_cb_t cb, preview_t mode, int interval, bool denoised, bool noisy, void* data) {
+void sd_set_preview_callback_impl(sd_preview_cb_t cb, preview_t mode, int interval, bool denoised, bool noisy, void* data) {
+    sd_preview_info     = {};
     sd_preview_cb       = cb;
     sd_preview_cb_data  = data;
     sd_preview_mode     = mode;
@@ -702,6 +767,17 @@ void sd_set_preview_callback(sd_preview_cb_t cb, preview_t mode, int interval, b
 void sd_set_backend_eval_callback(sd_graph_eval_callback_t cb, void* data) {
     sd_backend_eval_cb      = cb;
     sd_backend_eval_cb_data = data;
+}
+
+void sd_begin_preview_pass(int total_steps) {
+    if (sd_preview_cb != nullptr) {
+        ++sd_preview_info.sample_pass;
+        sd_preview_info.total_steps = total_steps;
+    }
+}
+
+sd_preview_info_t sd_get_preview_info() {
+    return sd_preview_info;
 }
 
 sd_preview_cb_t sd_get_preview_callback() {
@@ -739,7 +815,7 @@ void* sd_get_progress_callback_data() {
     return sd_progress_cb_data;
 }
 
-sd_image_t tensor_to_sd_image(const sd::Tensor<float>& tensor, int frame_index) {
+sd::Image tensor_to_sd_image(const sd::Tensor<float>& tensor, int frame_index) {
     const auto& shape = tensor.shape();
     GGML_ASSERT(shape.size() == 4 || shape.size() == 5);
     int width     = static_cast<int>(shape[0]);
@@ -756,7 +832,7 @@ sd_image_t tensor_to_sd_image(const sd::Tensor<float>& tensor, int frame_index) 
     };
 }
 
-sd::Tensor<float> sd_image_to_tensor(sd_image_t image,
+sd::Tensor<float> sd_image_to_tensor(sd::Image image,
                                      int target_width,
                                      int target_height,
                                      bool scale) {
@@ -764,13 +840,11 @@ sd::Tensor<float> sd_image_to_tensor(sd_image_t image,
                                                  static_cast<int64_t>(image.height),
                                                  static_cast<int64_t>(image.channel),
                                                  1});
-    for (uint32_t iw = 0; iw < image.width; ++iw) {
-        for (uint32_t ih = 0; ih < image.height; ++ih) {
-            for (uint32_t ic = 0; ic < image.channel; ++ic) {
-                tensor.index(iw, ih, ic, 0) = sd_image_get_f32(image, iw, ih, ic, scale);
-            }
-        }
-    }
+    const int64_t pixels     = int64_t(image.width) * image.height;
+    sd::tensor_for_each(tensor.numel(), [&](int64_t i) {
+        float value      = image.data[(i % pixels) * image.channel + i / pixels];
+        tensor.data()[i] = scale ? value / 255.f : value;
+    });
     if (target_width >= 0 && target_height >= 0 &&
         (tensor.shape()[0] != target_width || tensor.shape()[1] != target_height)) {
         tensor = sd::ops::interpolate(tensor,

@@ -72,6 +72,8 @@ namespace sd::guidance {
                                   float image_guidance_scale,
                                   AdaptiveProjectedGuidanceParams params);
 
+        void set_guidance_scale(float scale) { guidance_scale_ = scale; }
+
         GuiderOutput forward(const GuidanceInput& input,
                              GuiderOutput previous,
                              std::optional<float> scale_override = std::nullopt) const override;

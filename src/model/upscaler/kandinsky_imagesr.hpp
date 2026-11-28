@@ -105,14 +105,14 @@ namespace KandinskyImageSR {
             auto table = params.at("time_embed_table");
             auto time  = ggml_silu(g, ggml_view_1d(g, table, config.time_dim, row * table->nb[1]));
             // The input projection packs (patch_y, patch_x, channel), the output packs (channel, patch_y, patch_x).
-            auto x = input->forward(ctx, DiT::patchify(g, latent, 2, 2, false));
+            auto x = input->forward(ctx, DiT::patchify(ctx, latent, 2, 2, false));
             for (size_t i = 0; i < layers.size(); ++i) {
                 x = layers[i]->forward(ctx, x, time, pe, row);
                 sd::ggml_graph_cut::mark_graph_cut(x, "imagesr.block." + std::to_string(i), "x");
             }
             auto m = modulation->forward(ctx, time);
             x      = modulate(g, x, ggml_view_1d(g, m, config.dim, 0), ggml_view_1d(g, m, config.dim, config.dim * m->nb[0]));
-            return DiT::unpatchify(g, output->forward(ctx, x), latent->ne[1] / 2, latent->ne[0] / 2, 2, 2, true);
+            return DiT::unpatchify(ctx, output->forward(ctx, x), latent->ne[1] / 2, latent->ne[0] / 2, 2, 2, true);
         }
     };
 
@@ -146,16 +146,14 @@ namespace KandinskyImageSR {
             return restore_trailing_singleton_dims(GGMLRunner::compute(graph, threads), latent.dim());
         }
     };
-    bool is_bundle(const std::string& path);
 
     struct Upscaler {
         std::unique_ptr<Runner> transformer;
         std::shared_ptr<AutoEncoderKL> vae;
         int row_x2, row_x4;
 
-        static std::unique_ptr<Upscaler> load(const std::string& path, ModelLoader& loader, ggml_backend_t backend, std::shared_ptr<RunnerWeightManager> manager, bool direct);
+        static std::unique_ptr<Upscaler> create(const ModelLoader& loader, ggml_backend_t backend, std::shared_ptr<RunnerWeightManager> manager, bool direct);
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors);
-        void set_max_graph_vram_bytes(size_t bytes);
         sd::Tensor<float> upscale(int threads, const sd::Tensor<float>& image, int factor);
     };
 }  // namespace KandinskyImageSR

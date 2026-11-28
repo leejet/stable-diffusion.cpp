@@ -18,6 +18,7 @@ enum class ModelComponent {
     Upscaler,
     Detector,
     LatentUpsampler,
+    AnimateDiff,
     Count,
 };
 
@@ -54,7 +55,9 @@ inline const char* model_component_name(ModelComponent component) {
         case ModelComponent::Detector:
             return "YOLOv8";
         case ModelComponent::LatentUpsampler:
-            return "LTX latent upsampler";
+            return "Latent upscaler";
+        case ModelComponent::AnimateDiff:
+            return "AnimateDiff";
         case ModelComponent::Count:
             break;
     }

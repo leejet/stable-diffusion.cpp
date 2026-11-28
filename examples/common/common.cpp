@@ -30,31 +30,12 @@ namespace fs = std::filesystem;
 
 const char* const modes_str[] = {
     "img_gen",
-    "adetailer",
     "vid_gen",
     "convert",
     "upscale",
     "metadata",
+    "dgl",
 };
-
-static sd_vae_format_t str_to_vae_format(const std::string& value) {
-    if (value == "auto") {
-        return SD_VAE_FORMAT_AUTO;
-    }
-    if (value == "flux") {
-        return SD_VAE_FORMAT_FLUX;
-    }
-    if (value == "sd3") {
-        return SD_VAE_FORMAT_SD3;
-    }
-    if (value == "flux2") {
-        return SD_VAE_FORMAT_FLUX2;
-    }
-    if (value == "wan") {
-        return SD_VAE_FORMAT_WAN;
-    }
-    return SD_VAE_FORMAT_COUNT;
-}
 
 static void prepend_backend_assignment(std::string& spec, const char* assignment) {
     spec = spec.empty() ? assignment : std::string(assignment) + "," + spec;
@@ -75,7 +56,7 @@ static std::string utf16_to_utf8(const std::wstring& wstr) {
     return utf8;
 }
 
-static std::string argv_to_utf8(int index, const char** argv) {
+std::string argv_to_utf8(int index, const char** argv) {
     (void)argv;
     int argc;
     wchar_t** argv_w = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -91,7 +72,7 @@ static std::string argv_to_utf8(int index, const char** argv) {
 }
 
 #else  // Linux / macOS
-static std::string argv_to_utf8(int index, const char** argv) {
+std::string argv_to_utf8(int index, const char** argv) {
     return std::string(argv[index]);
 }
 
@@ -285,13 +266,13 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
                         invalid_arg = true;
                         return;
                     }
-                    if (option.concat && !option.target->empty()) {
+                    if (option.concat && !option.target.get().empty()) {
                         if (option.concat > 0 && option.concat <= 0xff) {
-                            *option.target += static_cast<char>(option.concat);
+                            option.target.set(option.target.get() + static_cast<char>(option.concat));
                         }
-                        *option.target += argv_to_utf8(i, argv);
+                        option.target.set(option.target.get() + argv_to_utf8(i, argv));
                     } else {
-                        *option.target = argv_to_utf8(i, argv);
+                        option.target.set(argv_to_utf8(i, argv));
                     }
                     found_arg = true;
                 }))
@@ -303,7 +284,7 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
                         return;
                     }
                     try {
-                        *option.target = std::stoi(argv[i]);
+                        option.target.set(std::stoi(argv[i]));
                     } catch (const std::invalid_argument&) {
                         invalid_arg = true;
                     }
@@ -317,7 +298,7 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
                         return;
                     }
                     try {
-                        *option.target = std::stof(argv[i]);
+                        option.target.set(std::stof(argv[i]));
                     } catch (const std::invalid_argument&) {
                         invalid_arg = true;
                     }
@@ -326,8 +307,8 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
                 break;
 
             if (match_and_apply(options.bool_options, [&](auto& option) {
-                    *option.target = option.keep_true ? true : false;
-                    found_arg      = true;
+                    option.target.set(option.keep_true);
+                    found_arg = true;
                 }))
                 break;
 
@@ -359,7 +340,7 @@ bool parse_options(int argc, const char** argv, const std::vector<ArgOptions>& o
     return true;
 }
 
-static int parse_scale_override(int argc, const char** argv, int index, float& scale) {
+static int parse_scale_override(int argc, const char** argv, int index, std::optional<float>& scale) {
     if (++index >= argc) {
         return -1;
     }
@@ -373,6 +354,23 @@ static int parse_scale_override(int argc, const char** argv, int index, float& s
         }
         scale = parsed;
     } catch (const std::exception&) {
+        return -1;
+    }
+    return 1;
+}
+
+static int parse_on_off_arg(int argc, const char** argv, int index, const char* option, std::optional<bool>& value) {
+    if (++index >= argc) {
+        LOG_ERROR("%s requires 'on' or 'off'", option);
+        return -1;
+    }
+    const std::string arg = argv[index];
+    if (arg == "on") {
+        value = true;
+    } else if (arg == "off") {
+        value = false;
+    } else {
+        LOG_ERROR("invalid %s value '%s'; expected 'on' or 'off'", option, argv[index]);
         return -1;
     }
     return 1;
@@ -447,7 +445,7 @@ ArgOptions SDContextParams::get_options() {
          &uncond_diffusion_model_path},
         {"",
          "--embeddings-connectors",
-         "path to LTXAV embeddings connectors",
+         "path to embeddings connectors (LTXAV or P-H3-Image)",
          0,
          &embeddings_connectors_path},
         {"",
@@ -486,18 +484,8 @@ ArgOptions SDContextParams::get_options() {
          0,
          &control_net_path},
         {"",
-         "--ip-adapter",
-         "path to IP-Adapter model (requires --clip_vision)",
-         0,
-         &ip_adapter_path},
-        {"",
-         "--motion-module",
-         "path to AnimateDiff motion module (SD 1.5); enables video generation on --video-frames > 1",
-         0,
-         &motion_module_path},
-        {"",
          "--embd-dir",
-         "embeddings directory",
+         "textual inversion embeddings directory (SD 1.x/2.x/SDXL only, see docs/embeddings.md)",
          0,
          &embedding_dir},
         {"",
@@ -523,18 +511,8 @@ ArgOptions SDContextParams::get_options() {
          (int)',',
          &model_args},
         {"",
-         "--photo-maker",
-         "path to PHOTOMAKER model",
-         0,
-         &photo_maker_path},
-        {"",
-         "--pulid-weights",
-         "path to PuLID Flux weights",
-         0,
-         &pulid_weights_path},
-        {"",
          "--upscale-model",
-         "path to an ESRGAN model file or Kandinsky ImageSR 2.0 bundle directory",
+         "path to ESRGAN or MoSR weights, or a Kandinsky ImageSR bundle directory",
          0,
          &esrgan_path},
         {"",
@@ -561,7 +539,7 @@ ArgOptions SDContextParams::get_options() {
          &rpc_servers},
         {"",
          "--max-vram",
-         "optional per-device budget in GiB for managed weights and runner buffers during automatic graph-cut execution. Accepts a single value or assignments by backend/device, e.g. 6 or cuda0=6,vulkan0=4. 0 uses live free VRAM without an explicit budget; a negative value reserves that much free VRAM",
+         "optional per-device budget in GiB for managed weights, runner buffers, and idle backend buffers. Accepts a single value or assignments by backend/device, e.g. 6 or cuda0=6,vulkan0=4. 0 uses live free VRAM without an explicit budget; a negative value reserves that much free VRAM",
          0,
          &max_vram},
     };
@@ -569,16 +547,20 @@ ArgOptions SDContextParams::get_options() {
     options.int_options = {
         {"-t",
          "--threads",
-         "number of threads to use during computation (default: -1). "
-         "If threads <= 0, then threads will be set to the number of CPU physical cores",
+         "positive number of computation threads; unset uses the library CPU core selection",
          &n_threads},
         {"",
          "--conditioning-cache-size",
-         "maximum number of conditioning results cached per model context (default: " + std::to_string(conditioning_cache_size) + ", 0 disables caching)",
+         "maximum cached conditioning results; unset uses the library default, 0 disables caching",
          &conditioning_cache_size},
     };
 
     options.bool_options = {
+        {"",
+         "--list-devices",
+         "list available ggml backend devices, including --rpc-servers (one 'name<TAB>description' per line), and exit; "
+         "the names are the device names accepted by --backend and --params-backend",
+         true, &list_devices},
         {"",
          "--disable-prefetch",
          "disable asynchronous next-segment weight prefetch (defaults to false)",
@@ -616,42 +598,13 @@ ArgOptions SDContextParams::get_options() {
          "deprecated; use --backend vae=cpu",
          true, &vae_on_cpu},
         {"",
-         "--fa",
-         "use flash attention",
-         true, &flash_attn},
-        {"",
-         "--diffusion-fa",
-         "use flash attention in the diffusion model only",
-         true, &diffusion_flash_attn},
-        {"",
          "--sage-attn",
          "use native CUDA SageAttention in the diffusion model, with flash/default attention fallback",
          true, &sage_attn},
         {"",
-         "--diffusion-conv-direct",
-         "use ggml_conv2d_direct in the diffusion model",
-         true, &diffusion_conv_direct},
-        {"",
-         "--vae-conv-direct",
-         "use direct 2D and 3D convolutions in the vae model",
-         true, &vae_conv_direct},
-    };
-
-    auto on_auto_fit_arg = [&](int argc, const char** argv, int index) {
-        if (++index >= argc) {
-            LOG_ERROR("--auto-fit requires 'on' or 'off'");
-            return -1;
-        }
-        const std::string arg = argv[index];
-        if (arg == "on") {
-            auto_fit = true;
-        } else if (arg == "off") {
-            auto_fit = false;
-        } else {
-            LOG_ERROR("invalid --auto-fit value '%s'; expected 'on' or 'off'", argv[index]);
-            return -1;
-        }
-        return 1;
+         "--taesd-preview-only",
+         "prevents usage of taesd for decoding the final image; the VAE keeps encoding / decoding and taesd is only used for step previews",
+         true, &taesd_preview_only},
     };
 
     auto on_type_arg = [&](int argc, const char** argv, int index) {
@@ -673,12 +626,7 @@ ArgOptions SDContextParams::get_options() {
             return -1;
         }
         const char* arg = argv[index];
-        rng_type        = str_to_rng_type(arg);
-        if (rng_type == RNG_TYPE_COUNT) {
-            LOG_ERROR("error: invalid rng type %s",
-                      arg);
-            return -1;
-        }
+        rng_type        = arg;
         return 1;
     };
 
@@ -687,12 +635,7 @@ ArgOptions SDContextParams::get_options() {
             return -1;
         }
         const char* arg  = argv[index];
-        sampler_rng_type = str_to_rng_type(arg);
-        if (sampler_rng_type == RNG_TYPE_COUNT) {
-            LOG_ERROR("error: invalid sampler rng type %s",
-                      arg);
-            return -1;
-        }
+        sampler_rng_type = arg;
         return 1;
     };
 
@@ -701,12 +644,7 @@ ArgOptions SDContextParams::get_options() {
             return -1;
         }
         const char* arg = argv[index];
-        prediction      = str_to_prediction(arg);
-        if (prediction == PREDICTION_COUNT) {
-            LOG_ERROR("error: invalid prediction type %s",
-                      arg);
-            return -1;
-        }
+        prediction      = arg;
         return 1;
     };
 
@@ -715,12 +653,7 @@ ArgOptions SDContextParams::get_options() {
             return -1;
         }
         const char* arg = argv[index];
-        lora_apply_mode = str_to_lora_apply_mode(arg);
-        if (lora_apply_mode == LORA_APPLY_MODE_COUNT) {
-            LOG_ERROR("error: invalid lora apply model %s",
-                      arg);
-            return -1;
-        }
+        lora_apply_mode = arg;
         return 1;
     };
 
@@ -733,16 +666,99 @@ ArgOptions SDContextParams::get_options() {
          }},
         {"",
          "--attn-scale",
-         "flash-attention K/V scale override (float, default: 0 = model default, 1 = no scaling); requires --fa or --diffusion-fa",
+         "flash-attention K/V scale override (float, default: 0 = model default, 1 = no scaling); applies when flash attention is selected",
          [this](int argc, const char** argv, int index) {
              return parse_scale_override(argc, argv, index, attn_scale);
+         }},
+        {"",
+         "--diffusion-conv-direct",
+         "deprecated; use --conv-direct auto,diffusion=on,controlnet=on",
+         [this](int, const char**, int) {
+             LOG_WARN("--diffusion-conv-direct is deprecated; use --conv-direct auto,diffusion=on,controlnet=on instead.");
+             diffusion_conv_direct = true;
+             return 0;
+         }},
+        {"",
+         "--vae-conv-direct",
+         "deprecated; use --conv-direct auto,vae=on",
+         [this](int, const char**, int) {
+             LOG_WARN("--vae-conv-direct is deprecated; use --conv-direct auto,vae=on instead.");
+             vae_conv_direct = true;
+             return 0;
+         }},
+        {"",
+         "--linear-type",
+         "auto|i8|raw or module assignments, e.g. dit=i8 or i8,te=raw. Default: auto (currently equivalent to raw)",
+         [this](int argc, const char** argv, int index) {
+             if (++index >= argc || argv[index][0] == '\0') {
+                 LOG_ERROR("--linear-type requires auto, i8, raw, or module assignments");
+                 return -1;
+             }
+             SDOptPtr validation(sd_ctx_opt_create());
+             if (sd_opt_set_string(validation.get(), "linear_type", argv[index]) != SD_STATUS_OK) {
+                 LOG_ERROR("--linear-type: %s", sd_get_last_error());
+                 return -1;
+             }
+             linear_type = argv[index];
+             return 1;
+         }},
+        {"",
+         "--conv-direct",
+         "on|off|auto or diffusion/vae/controlnet assignments (default: auto), e.g. auto,vae=off. Overrides legacy convolution flags",
+         [this](int argc, const char** argv, int index) {
+             if (++index >= argc || argv[index][0] == '\0') {
+                 LOG_ERROR("--conv-direct requires on, off, auto, or module assignments");
+                 return -1;
+             }
+             conv_direct_mode = argv[index];
+             return 1;
+         }},
+        {"",
+         "--flash-attn",
+         "on|off|auto or module assignments (default: auto), e.g. auto,te=off,vae=on. Last repeated option wins",
+         [this](int argc, const char** argv, int index) {
+             if (++index >= argc) {
+                 LOG_ERROR("--flash-attn requires on, off, or auto");
+                 return -1;
+             }
+             const std::string value = argv[index];
+             if (value.empty()) {
+                 LOG_ERROR("--flash-attn requires a nonempty value");
+                 return -1;
+             }
+             flash_attn_mode = value;
+             return 1;
+         }},
+        {"",
+         "--fa",
+         "deprecated; use --flash-attn on",
+         [this](int, const char**, int) {
+             LOG_WARN("--fa is deprecated; use --flash-attn on instead.");
+             flash_attn_mode = "on";
+             return 0;
+         }},
+        {"",
+         "--diffusion-fa",
+         "deprecated; use --flash-attn off,diffusion=on",
+         [this](int, const char**, int) {
+             LOG_WARN("--diffusion-fa is deprecated; use --flash-attn off,diffusion=on instead.");
+             flash_attn_mode = "off,diffusion=on";
+             return 0;
          }},
         {"",
          "--auto-fit",
          "on|off (default: on). Preserve --backend (otherwise select one GPU) and place weights on the compute GPU, "
          "RAM, another GPU, or disk in that order, according to available memory (--max-vram limits GPU budgets). "
          "Disabled by explicit --params-backend; uses automatic graph segmentation when needed",
-         on_auto_fit_arg},
+         [this](int argc, const char** argv, int index) {
+             return parse_on_off_arg(argc, argv, index, "--auto-fit", auto_fit);
+         }},
+        {"",
+         "--batched-cfg",
+         "on|off (default: on). Run the conditional and unconditional CFG branches in one batched UNet forward when supported",
+         [this](int argc, const char** argv, int index) {
+             return parse_on_off_arg(argc, argv, index, "--batched-cfg", batched_cfg);
+         }},
         {"",
          "--type",
          "weight type (examples: f32, f16, q4_0, q4_1, q5_0, q5_1, q8_0, q2_K, q3_K, q4_K). "
@@ -758,46 +774,48 @@ ArgOptions SDContextParams::get_options() {
          on_sampler_rng_arg},
         {"",
          "--prediction",
-         "prediction type override, one of [eps, v, edm_v, sd3_flow, flux_flow, sefi_flow]",
+         "prediction type override, one of [eps, v, edm_v, flow, flux_flow, sefi_flow, minit2i_flow, sensenova_u1_flow, flux3_flow, h3_av_flow, ming_image_flow]",
          on_prediction_arg},
         {"",
          "--lora-apply-mode",
-         "the way to apply LoRA, one of [auto, immediately, at_runtime], default is auto. "
-         "In auto mode, if the model weights contain any quantized parameters, the at_runtime mode will be used; otherwise, immediately will be used."
-         "The immediately mode may have precision and compatibility issues with quantized parameters, "
-         "but it usually offers faster inference speed and, in some cases, lower memory usage. "
-         "The at_runtime mode, on the other hand, is exactly the opposite.",
+         "Select auto (default), immediately, or at_runtime for LoRA application. "
+         "Auto merges unquantized weights on the compute backend when row splitting is off. "
+         "It applies LoRA at runtime for quantized, offloaded, or row-split weights.",
          on_lora_apply_mode_arg},
-        {"",
-         "--list-devices",
-         "list available ggml backend devices (one 'name<TAB>description' per line) and exit; "
-         "the names are the device names accepted by --backend and --params-backend",
-         [](int /*argc*/, const char** /*argv*/, int /*index*/) {
-             size_t device_list_size = sd_list_devices(nullptr, 0);
-             std::vector<char> devices(device_list_size + 1);
-             sd_list_devices(devices.data(), devices.size());
-             fputs(devices.data(), stdout);
-             std::exit(0);
-             return 0;
-         }},
     };
 
     return options;
 }
 
+bool SDContextParams::register_rpc_devices() const {
+    return !rpc_servers || sd_add_rpc_servers(rpc_servers->c_str());
+}
+
+bool SDContextParams::print_devices() const {
+    if (!register_rpc_devices()) {
+        return false;
+    }
+    size_t device_list_size = sd_list_devices(nullptr, 0);
+    std::vector<char> devices(device_list_size + 1);
+    sd_list_devices(devices.data(), devices.size());
+    fputs(devices.data(), stdout);
+    return true;
+}
+
 void SDContextParams::build_embedding_map() {
     static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt", ".ckpt"};
 
-    if (!fs::exists(embedding_dir) || !fs::is_directory(embedding_dir)) {
+    const fs::path embedding_dir_path = fs::u8path(embedding_dir);
+    if (!fs::exists(embedding_dir_path) || !fs::is_directory(embedding_dir_path)) {
         return;
     }
 
-    for (auto& p : fs::directory_iterator(embedding_dir)) {
+    for (auto& p : fs::directory_iterator(embedding_dir_path)) {
         if (!p.is_regular_file())
             continue;
 
         auto path       = p.path();
-        std::string ext = path.extension().string();
+        std::string ext = path.extension().u8string();
 
         bool valid = false;
         for (auto& e : valid_ext) {
@@ -809,28 +827,20 @@ void SDContextParams::build_embedding_map() {
         if (!valid)
             continue;
 
-        std::string key   = path.stem().string();
-        std::string value = path.string();
+        std::string key   = path.stem().u8string();
+        std::string value = path.u8string();
 
         embedding_map[key] = value;
     }
 }
 
 bool SDContextParams::resolve(SDMode mode) {
-    if (n_threads <= 0) {
-        n_threads = sd_get_num_physical_cores();
-    }
-
     build_embedding_map();
 
     return true;
 }
 
 bool SDContextParams::validate(SDMode mode) {
-    if (conditioning_cache_size < 0) {
-        LOG_ERROR("error: conditioning-cache-size must be non-negative");
-        return false;
-    }
     if (mode == CONVERT) {
         const bool has_convert_input = model_path.length() != 0 ||
                                        clip_l_path.length() != 0 ||
@@ -854,8 +864,8 @@ bool SDContextParams::validate(SDMode mode) {
         }
     }
 
-    if (str_to_vae_format(vae_format) == SD_VAE_FORMAT_COUNT) {
-        LOG_ERROR("error: vae_format must be 'auto', 'flux', 'sd3', 'flux2', or 'wan'");
+    if (!to_context_opt()) {
+        LOG_ERROR("%s", sd_get_last_error());
         return false;
     }
 
@@ -873,8 +883,8 @@ bool SDContextParams::resolve_and_validate(SDMode mode) {
 }
 
 void SDContextParams::prepare_backend_assignments() {
-    effective_backend        = backend;
-    effective_params_backend = params_backend;
+    effective_backend        = backend.value_or("");
+    effective_params_backend = params_backend.value_or("");
 
     if (offload_params_to_cpu) {
         prepend_backend_assignment(effective_params_backend, "*=cpu");
@@ -934,37 +944,56 @@ std::string SDContextParams::to_string() const {
         << "  lora_model_dir: \"" << lora_model_dir << "\",\n"
         << "  hires_upscalers_dir: \"" << hires_upscalers_dir << "\",\n"
         << "  photo_maker_path: \"" << photo_maker_path << "\",\n"
-        << "  rng_type: " << sd_rng_type_name(rng_type) << ",\n"
-        << "  sampler_rng_type: " << sd_rng_type_name(sampler_rng_type) << ",\n"
+        << "  rng_type: " << rng_type << ",\n"
+        << "  sampler_rng_type: " << sampler_rng_type << ",\n"
         << "  offload_params_to_cpu: " << (offload_params_to_cpu ? "true" : "false") << ",\n"
         << "  max_vram: \"" << max_vram << "\",\n"
-        << "  disable_prefetch: " << (disable_prefetch ? "true" : "false") << ",\n"
-        << "  disable_segmented_compute: " << (disable_segmented_compute ? "true" : "false") << ",\n"
-        << "  eager_load: " << (eager_load ? "true" : "false") << ",\n"
+        << "  disable_prefetch: " << disable_prefetch << ",\n"
+        << "  disable_segmented_compute: " << disable_segmented_compute << ",\n"
+        << "  batched_cfg: " << batched_cfg << ",\n"
+        << "  eager_load: " << eager_load << ",\n"
         << "  backend: \"" << backend << "\",\n"
         << "  params_backend: \"" << params_backend << "\",\n"
         << "  split_mode: \"" << split_mode << "\",\n"
         << "  model_args: \"" << model_args << "\",\n"
-        << "  auto_fit: " << (auto_fit ? "true" : "false") << ",\n"
-        << "  enable_mmap: " << (enable_mmap ? "true" : "false") << ",\n"
+        << "  auto_fit: " << auto_fit << ",\n"
+        << "  enable_mmap: " << enable_mmap << ",\n"
         << "  control_net_cpu: " << (control_net_cpu ? "true" : "false") << ",\n"
         << "  clip_on_cpu: " << (clip_on_cpu ? "true" : "false") << ",\n"
         << "  vae_on_cpu: " << (vae_on_cpu ? "true" : "false") << ",\n"
-        << "  flash_attn: " << (flash_attn ? "true" : "false") << ",\n"
-        << "  diffusion_flash_attn: " << (diffusion_flash_attn ? "true" : "false") << ",\n"
-        << "  sage_attn: " << (sage_attn ? "true" : "false") << ",\n"
+        << "  flash_attn_mode: " << flash_attn_mode << ",\n"
+        << "  conv_direct_mode: " << conv_direct_mode << ",\n"
+        << "  sage_attn: " << sage_attn << ",\n"
+        << "  linear_type: " << linear_type.value_or("auto") << ",\n"
         << "  linear_scale: " << linear_scale << ",\n"
         << "  attn_scale: " << attn_scale << ",\n"
-        << "  diffusion_conv_direct: " << (diffusion_conv_direct ? "true" : "false") << ",\n"
-        << "  vae_conv_direct: " << (vae_conv_direct ? "true" : "false") << ",\n"
-        << "  prediction: " << sd_prediction_name(prediction) << ",\n"
-        << "  lora_apply_mode: " << sd_lora_apply_mode_name(lora_apply_mode) << ",\n"
-        << "  force_sdxl_vae_conv_scale: " << (force_sdxl_vae_conv_scale ? "true" : "false") << "\n"
+        << "  diffusion_conv_direct: " << diffusion_conv_direct << ",\n"
+        << "  vae_conv_direct: " << vae_conv_direct << ",\n"
+        << "  taesd_preview_only: " << taesd_preview_only << ",\n"
+        << "  prediction: " << prediction << ",\n"
+        << "  lora_apply_mode: " << lora_apply_mode << ",\n"
+        << "  force_sdxl_vae_conv_scale: " << force_sdxl_vae_conv_scale << "\n"
         << "}";
     return oss.str();
 }
 
-sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
+bool SDContextParams::configure_dgl(sd_dgl_ctx_t* ctx) const {
+    auto set = [ctx](const char* key, const auto& option) {
+        return !option || sd_dgl_ctx_set(ctx, key, std::to_string(*option).c_str());
+    };
+    return (!max_vram || sd_dgl_ctx_set(ctx, "max_vram", max_vram->c_str())) &&
+           (!linear_type || sd_dgl_ctx_set(ctx, "linear_type", linear_type->c_str())) &&
+           set("auto_fit", auto_fit) &&
+           set("conditioning_cache_size", conditioning_cache_size) &&
+           set("batched_cfg", batched_cfg) &&
+           set("n_threads", n_threads) &&
+           set("enable_mmap", enable_mmap) &&
+           set("eager_load", eager_load) &&
+           set("disable_prefetch", disable_prefetch) &&
+           set("disable_segmented_compute", disable_segmented_compute);
+}
+
+SDOptPtr SDContextParams::to_context_opt() {
     prepare_backend_assignments();
     embedding_vec.clear();
     embedding_vec.reserve(embedding_map.size());
@@ -975,66 +1004,71 @@ sd_ctx_params_t SDContextParams::to_sd_ctx_params_t(bool taesd_preview) {
         embedding_vec.emplace_back(item);
     }
 
-    sd_ctx_params_t sd_ctx_params;
-    sd_ctx_params_init(&sd_ctx_params);
-    sd_ctx_params.model_path                      = model_path.c_str();
-    sd_ctx_params.clip_l_path                     = clip_l_path.c_str();
-    sd_ctx_params.clip_g_path                     = clip_g_path.c_str();
-    sd_ctx_params.clip_vision_path                = clip_vision_path.c_str();
-    sd_ctx_params.t5xxl_path                      = t5xxl_path.c_str();
-    sd_ctx_params.llm_path                        = llm_path.c_str();
-    sd_ctx_params.llm_vision_path                 = llm_vision_path.c_str();
-    sd_ctx_params.tokenizer                       = tokenizer.c_str();
-    sd_ctx_params.diffusion_model_path            = diffusion_model_path.c_str();
-    sd_ctx_params.high_noise_diffusion_model_path = high_noise_diffusion_model_path.c_str();
-    sd_ctx_params.uncond_diffusion_model_path     = uncond_diffusion_model_path.c_str();
-    sd_ctx_params.embeddings_connectors_path      = embeddings_connectors_path.c_str();
-    sd_ctx_params.vae_path                        = vae_path.c_str();
-    sd_ctx_params.audio_vae_path                  = audio_vae_path.c_str();
-    sd_ctx_params.audio_encoder_path              = audio_encoder_path.c_str();
-    sd_ctx_params.taesd_path                      = taesd_path.c_str();
-    sd_ctx_params.control_net_path                = control_net_path.c_str();
-    sd_ctx_params.ip_adapter_path                 = ip_adapter_path.c_str();
-    sd_ctx_params.motion_module_path              = motion_module_path.c_str();
-    sd_ctx_params.embeddings                      = embedding_vec.data();
-    sd_ctx_params.embedding_count                 = static_cast<uint32_t>(embedding_vec.size());
-    sd_ctx_params.photo_maker_path                = photo_maker_path.c_str();
-    sd_ctx_params.pulid_weights_path              = pulid_weights_path.c_str();
-    sd_ctx_params.tensor_type_rules               = tensor_type_rules.c_str();
-    sd_ctx_params.n_threads                       = n_threads;
-    sd_ctx_params.conditioning_cache_size         = conditioning_cache_size;
-    sd_ctx_params.wtype                           = wtype;
-    sd_ctx_params.rng_type                        = rng_type;
-    sd_ctx_params.sampler_rng_type                = sampler_rng_type;
-    sd_ctx_params.prediction                      = prediction;
-    sd_ctx_params.lora_apply_mode                 = lora_apply_mode;
-    sd_ctx_params.enable_mmap                     = enable_mmap;
-    sd_ctx_params.flash_attn                      = flash_attn;
-    sd_ctx_params.diffusion_flash_attn            = diffusion_flash_attn;
-    sd_ctx_params.sage_attn                       = sage_attn;
-    sd_ctx_params.linear_scale                    = linear_scale;
-    sd_ctx_params.attn_scale                      = attn_scale;
-    sd_ctx_params.tae_preview_only                = taesd_preview;
-    sd_ctx_params.diffusion_conv_direct           = diffusion_conv_direct;
-    sd_ctx_params.vae_conv_direct                 = vae_conv_direct;
-    sd_ctx_params.force_sdxl_vae_conv_scale       = force_sdxl_vae_conv_scale;
-    sd_ctx_params.vae_format                      = str_to_vae_format(vae_format);
-    sd_ctx_params.max_vram                        = max_vram.c_str();
-    sd_ctx_params.disable_prefetch                = disable_prefetch;
-    sd_ctx_params.disable_segmented_compute       = disable_segmented_compute;
-    sd_ctx_params.eager_load                      = eager_load;
-    sd_ctx_params.backend                         = effective_backend.c_str();
-    sd_ctx_params.params_backend                  = effective_params_backend.c_str();
-    sd_ctx_params.split_mode                      = split_mode.c_str();
-    sd_ctx_params.auto_fit                        = auto_fit;
-    sd_ctx_params.rpc_servers                     = rpc_servers.c_str();
-    sd_ctx_params.model_args                      = model_args.empty() ? nullptr : model_args.c_str();
-    return sd_ctx_params;
+    SDOptBuilder opt(sd_ctx_opt_create());
+    opt.set_string("model_path", model_path);
+    opt.set_string("clip_l_path", clip_l_path);
+    opt.set_string("clip_g_path", clip_g_path);
+    opt.set_string("clip_vision_path", clip_vision_path);
+    opt.set_string("t5xxl_path", t5xxl_path);
+    opt.set_string("llm_path", llm_path);
+    opt.set_string("llm_vision_path", llm_vision_path);
+    opt.set_string("tokenizer", tokenizer);
+    opt.set_string("diffusion_model_path", diffusion_model_path);
+    opt.set_string("high_noise_diffusion_model_path", high_noise_diffusion_model_path);
+    opt.set_string("uncond_diffusion_model_path", uncond_diffusion_model_path);
+    opt.set_string("embeddings_connectors_path", embeddings_connectors_path);
+    opt.set_string("vae_path", vae_path);
+    opt.set_string("audio_vae_path", audio_vae_path);
+    opt.set_string("audio_encoder_path", audio_encoder_path);
+    opt.set_string("taesd_path", taesd_path);
+    opt.set_string("control_net_path", control_net_path);
+    if (!ip_adapter_path.empty())
+        opt.set_string("ip_adapter_path", ip_adapter_path);
+    if (!motion_module_path.empty())
+        opt.set_string("motion_module_path", motion_module_path);
+    if (!photo_maker_path.empty())
+        opt.set_string("photo_maker_path", photo_maker_path);
+    if (!pulid_weights_path.empty())
+        opt.set_string("pulid_weights_path", pulid_weights_path);
+    opt.set_string("tensor_type_rules", tensor_type_rules);
+    opt.set_int("n_threads", n_threads);
+    opt.set_int("conditioning_cache_size", conditioning_cache_size);
+    if (wtype != SD_TYPE_COUNT)
+        opt.set_string("wtype", sd_type_name(wtype));
+    opt.set_string("rng_type", rng_type);
+    opt.set_string("sampler_rng_type", sampler_rng_type);
+    opt.set_string("prediction", prediction);
+    opt.set_string("lora_apply_mode", lora_apply_mode);
+    opt.set_bool("enable_mmap", enable_mmap);
+    opt.set_string("flash_attn_mode", flash_attn_mode);
+    opt.set_string("conv_direct_mode", conv_direct_mode);
+    opt.set_bool("sage_attn", sage_attn);
+    opt.set_string("linear_type", linear_type);
+    opt.set_float("linear_scale", linear_scale);
+    opt.set_float("attn_scale", attn_scale);
+    opt.set_bool("tae_preview_only", taesd_preview_only);
+    opt.set_bool("diffusion_conv_direct", diffusion_conv_direct);
+    opt.set_bool("vae_conv_direct", vae_conv_direct);
+    opt.set_bool("force_sdxl_vae_conv_scale", force_sdxl_vae_conv_scale);
+    opt.set_string("vae_format", vae_format);
+    opt.set_string("max_vram", max_vram);
+    opt.set_bool("disable_prefetch", disable_prefetch);
+    opt.set_bool("disable_segmented_compute", disable_segmented_compute);
+    opt.set_bool("batched_cfg", batched_cfg);
+    opt.set_bool("eager_load", eager_load);
+    if (backend || !effective_backend.empty())
+        opt.set_string("backend", effective_backend);
+    if (params_backend || !effective_params_backend.empty())
+        opt.set_string("params_backend", effective_params_backend);
+    opt.set_string("split_mode", split_mode);
+    opt.set_bool("auto_fit", auto_fit);
+    opt.set_string("rpc_servers", rpc_servers);
+    opt.set_string("model_args", model_args);
+    opt.set_embeddings("embeddings", embedding_vec.data(), embedding_vec.size());
+    return opt.finish();
 }
 
 SDGenerationParams::SDGenerationParams() {
-    sd_sample_params_init(&sample_params);
-    sd_sample_params_init(&high_noise_sample_params);
 }
 
 ArgOptions SDGenerationParams::get_options() {
@@ -1050,26 +1084,6 @@ ArgOptions SDGenerationParams::get_options() {
          "the negative prompt (default: \"\")",
          0,
          &negative_prompt},
-        {"",
-         "--ad-model",
-         "path to a converted YOLOv8 detection model for ADetailer",
-         0,
-         &ad_model_path},
-        {"",
-         "--ad-prompt",
-         "ADetailer prompt; empty inherits the main prompt, supports [PROMPT], [SEP], and [SKIP]",
-         0,
-         &ad_prompt},
-        {"",
-         "--ad-negative-prompt",
-         "ADetailer negative prompt; empty inherits the main negative prompt, supports [PROMPT] and [SEP]",
-         0,
-         &ad_negative_prompt},
-        {"",
-         "--extra-ad-args",
-         "extra ADetailer args, key=value list. Supports input_size, confidence, nms, max_detections, mask_k_largest, mask_min_ratio, mask_max_ratio, dilate_erode, x_offset, y_offset, mask_mode, merge_masks, invert_mask, mask_blur, inpaint_padding, inpaint_width, inpaint_height, denoising_strength, steps, cfg_scale, sample_method, scheduler, sort_by",
-         (int)',',
-         &extra_ad_args},
         {"-i",
          "--init-img",
          "path to the init image",
@@ -1091,32 +1105,11 @@ ArgOptions SDGenerationParams::get_options() {
          0,
          &control_image_path},
         {"",
-         "--ip-adapter-image",
-         "path to the IP-Adapter reference image",
-         0,
-         &ip_adapter_image_path},
-        {"",
          "--control-video",
-         "path to control video frames, It must be a directory path. The video frames inside should be stored as images in "
-         "lexicographical (character) order. For example, if the control video path is `frames`, the directory contain images "
-         "such as 00.png, 01.png, ... etc.",
+         "control video file (AVI, WebP or independent-frame VP8 WebM) or frame directory in filename order; "
+         "files are sampled at the output FPS without audio",
          0,
          &control_video_path},
-        {"",
-         "--pm-id-images-dir",
-         "path to PHOTOMAKER input id images dir",
-         0,
-         &pm_id_images_dir},
-        {"",
-         "--pm-id-embed-path",
-         "path to PHOTOMAKER v2 id embed",
-         0,
-         &pm_id_embed_path},
-        {"",
-         "--pulid-id-embedding",
-         "path to PuLID id embedding",
-         0,
-         &pulid_id_embedding_path},
         {"",
          "--hires-upscaler",
          "highres fix upscaler, Lanczos, Nearest, Latent, Latent (nearest), Latent (nearest-exact), "
@@ -1125,23 +1118,22 @@ ArgOptions SDGenerationParams::get_options() {
          0,
          &hires_upscaler},
         {"",
+         "--control-type",
+         "kind of the control image, one of [openpose, depth, scribble, canny, normal, segment, tile, repaint]. "
+         "Required by an SDXL Control Net Union model (tile and repaint only exist in its ProMax variant), ignored by any other Control Net. "
+         "Also accepted: hed, softedge, pidi, ted (scribble); lineart, anime_lineart, mlsd (canny); seg (segment); inpaint, outpaint (repaint)",
+         0,
+         &control_type},
+        {"",
          "--extra-sample-args",
-         "extra sampler/scheduler/guidance args, key=value list. CFG supports guidance_schedule; APG supports apg_eta, apg_momentum, apg_norm_threshold, apg_norm_threshold_smoothing; SLG supports slg_uncond; lcm supports noise_clip_std, noise_scale_start, noise_scale_end; flux supports base_shift, max_shift; ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports gamma; beta scheduler supports alpha, beta; logit_normal supports mu, std, logsnr_min, logsnr_max, resolution_aware; llada_image supports uniform; lms supports lms_max_order, lms_shift, lms_divisions; noise-injecting samplers support noise_sampler with value iid (default except for dpm++2m_sde_bt) or brownian_tree; brownian_tree_rng supports cpu (default), cuda, std_default or sampler_rng",
+         "extra sampler/scheduler/guidance args, key=value list. CFG supports guidance_schedule; APG supports apg_eta, apg_momentum, apg_norm_threshold, apg_norm_threshold_smoothing; lcm supports noise_clip_std, noise_scale_start, noise_scale_end; flux supports base_shift, max_shift; ltx2 supports max_shift, base_shift, stretch, terminal; euler_ge supports gamma; beta scheduler supports alpha, beta; logit_normal supports mu, std, logsnr_min, logsnr_max, resolution_aware; llada_image supports uniform; lms supports lms_max_order, lms_shift, lms_divisions; noise-injecting samplers support noise_sampler with value iid (default except for dpm++2m_sde_bt) or brownian_tree; brownian_tree_rng supports cpu (default), cuda, std_default or sampler_rng",
          (int)',',
          &extra_sample_args},
         {"",
          "--extra-tiling-args",
-         "extra VAE tiling args, key=value list. Supported video VAEs accept temporal_tile_frames/temporal_tile_size (default: 4), temporal_tile_overlap (default: 1)",
+         "extra VAE tiling args, key=value list. Supported video VAEs accept temporal_tile_frames/temporal_tile_size (default: 4), temporal_tile_overlap (default: 1); Wan2.2 TI2V 5B accepts temporal_decode_frames (default: 1)",
          (int)',',
          &extra_tiling_args},
-        {"",
-         "--ref-image-args",
-         "Key-value list to set up the way the reference images are processed (empty = auto-detect from model weigths)",
-         (int)',',
-         &ref_image_args},
-        {"", "--image-preprocess",
-         "Image preprocessing rule: target=init|end|mask|control|ref|ip-adapter|id|control-frame,index=N,mode=auto|none|stretch|crop|crop-resize|fit-pad,filter=auto|nearest|nearest-exact|bilinear|bicubic|lanczos,antialias=auto|true|false,width=W,height=H,anchor=center|top|bottom|left|right,pad_color=#RRGGBB[AA],canny=true|false. Repeat for multiple rules.",
-         (int)';', &image_preprocess},
     };
 
     options.int_options = {
@@ -1159,7 +1151,7 @@ ArgOptions SDGenerationParams::get_options() {
          &sample_params.sample_steps},
         {"",
          "--high-noise-steps",
-         "(high noise) number of sample steps (default: -1 = auto)",
+         "high-noise steps; >= 0 adds to --steps, -1 splits --steps at --moe-boundary (default: -1)",
          &high_noise_sample_params.sample_steps},
         {"",
          "--clip-skip",
@@ -1176,24 +1168,19 @@ ArgOptions SDGenerationParams::get_options() {
          &qwen_image_layers},
         {"",
          "--video-frames",
-         "video frames (default: 1)",
+         "video frames; unset uses the library default",
          &video_frames},
         {"",
          "--fps",
          "fps (default: 24)",
          &fps},
         {"",
-         "--timestep-shift",
-         "shift timestep for NitroFusion models (default: 0). "
-         "recommended N for NitroSD-Realism around 250 and 500 for NitroSD-Vibrant",
-         &sample_params.shifted_timestep},
-        {"",
          "--upscale-factor",
-         "Kandinsky ImageSR scale factor, 2 or 4 (default: 4)",
+         "Kandinsky ImageSR scale factor: 2 or 4 (default: 4)",
          &upscale_factor},
         {"",
          "--upscale-repeats",
-         "Run the upscaler this many times (default: 1)",
+         "Run the ESRGAN upscaler this many times (default: 1)",
          &upscale_repeats},
         {"",
          "--upscale-tile-size",
@@ -1231,18 +1218,6 @@ ArgOptions SDGenerationParams::get_options() {
          "distilled guidance scale for models with guidance input (default: 3.5)",
          &sample_params.guidance.distilled_guidance},
         {"",
-         "--slg-scale",
-         "skip layer guidance (SLG) scale, only for DiT models: (default: 0). 0 means disabled, a value of 2.5 is nice for sd3.5 medium",
-         &sample_params.guidance.slg.scale},
-        {"",
-         "--skip-layer-start",
-         "SLG enabling point (default: 0.01)",
-         &sample_params.guidance.slg.layer_start},
-        {"",
-         "--skip-layer-end",
-         "SLG disabling point (default: 0.2)",
-         &sample_params.guidance.slg.layer_end},
-        {"",
          "--eta",
          "noise multiplier (default: 0 for ddim_trailing, tcd, res_multistep and res_2s; 1 for euler_a, er_sde, dpm++2s_a, dpm++2m_sde and dpm++2m_sde_bt)",
          &sample_params.eta},
@@ -1251,53 +1226,13 @@ ArgOptions SDGenerationParams::get_options() {
          "shift value for Flow models like SD3.x or WAN (default: auto)",
          &sample_params.flow_shift},
         {"",
-         "--high-noise-cfg-scale",
-         "(high noise) unconditional guidance scale: (default: 7.0)",
-         &high_noise_sample_params.guidance.txt_cfg},
-        {"",
-         "--high-noise-img-cfg-scale",
-         "(high noise) image guidance scale for inpaint or image edit models (default: same as --cfg-scale)",
-         &high_noise_sample_params.guidance.img_cfg},
-        {"",
-         "--high-noise-guidance",
-         "(high noise) distilled guidance scale for models with guidance input (default: 3.5)",
-         &high_noise_sample_params.guidance.distilled_guidance},
-        {"",
-         "--high-noise-slg-scale",
-         "(high noise) skip layer guidance (SLG) scale, only for DiT models: (default: 0)",
-         &high_noise_sample_params.guidance.slg.scale},
-        {"",
-         "--high-noise-skip-layer-start",
-         "(high noise) SLG enabling point (default: 0.01)",
-         &high_noise_sample_params.guidance.slg.layer_start},
-        {"",
-         "--high-noise-skip-layer-end",
-         "(high noise) SLG disabling point (default: 0.2)",
-         &high_noise_sample_params.guidance.slg.layer_end},
-        {"",
-         "--high-noise-eta",
-         "(high noise) noise multiplier (default: 0 for ddim_trailing, tcd, res_multistep and res_2s; 1 for euler_a, er_sde, dpm++2s_a, dpm++2m_sde and dpm++2m_sde_bt)",
-         &high_noise_sample_params.eta},
-        {"",
          "--strength",
          "strength for noising/unnoising (default: 0.75)",
          &strength},
         {"",
-         "--pm-style-strength",
-         "",
-         &pm_style_strength},
-        {"",
-         "--pulid-id-weight",
-         "strength of PuLID identity injection",
-         &pulid_id_weight},
-        {"",
          "--control-strength",
          "strength to apply Control Net (default: 0.9). 1.0 corresponds to full destruction of information in init image",
          &control_strength},
-        {"",
-         "--ip-adapter-strength",
-         "strength to apply IP-Adapter (default: 1.0)",
-         &ip_adapter_strength},
         {"",
          "--moe-boundary",
          "timestep boundary for Wan2.2 MoE model. (default: 0.875). Only enabled if `--high-noise-steps` is set to -1",
@@ -1322,11 +1257,6 @@ ArgOptions SDGenerationParams::get_options() {
 
     options.bool_options = {
         {"",
-         "--increase-ref-index",
-         "automatically increase the indices of references images based on the order they are listed (starting with 1).",
-         true,
-         &increase_ref_index},
-        {"",
          "--circular",
          "enable circular padding on both axes for tileable output",
          true, &circular},
@@ -1340,7 +1270,7 @@ ArgOptions SDGenerationParams::get_options() {
          true, &circular_y},
         {"",
          "--disable-image-metadata",
-         "do not embed generation metadata on image files",
+         "do not embed generation metadata in image or video files (including DGL saves)",
          false,
          &embed_image_metadata},
         {"",
@@ -1373,26 +1303,7 @@ ArgOptions SDGenerationParams::get_options() {
             return -1;
         }
         const char* arg             = argv[index];
-        sample_params.sample_method = str_to_sample_method(arg);
-        if (sample_params.sample_method == SAMPLE_METHOD_COUNT) {
-            LOG_ERROR("error: invalid sample method %s",
-                      arg);
-            return -1;
-        }
-        return 1;
-    };
-
-    auto on_high_noise_sample_method_arg = [&](int argc, const char** argv, int index) {
-        if (++index >= argc) {
-            return -1;
-        }
-        const char* arg                        = argv[index];
-        high_noise_sample_params.sample_method = str_to_sample_method(arg);
-        if (high_noise_sample_params.sample_method == SAMPLE_METHOD_COUNT) {
-            LOG_ERROR("error: invalid high noise sample method %s",
-                      arg);
-            return -1;
-        }
+        sample_params.sample_method = arg;
         return 1;
     };
 
@@ -1401,74 +1312,28 @@ ArgOptions SDGenerationParams::get_options() {
             return -1;
         }
         const char* arg         = argv[index];
-        sample_params.scheduler = str_to_scheduler(arg);
-        if (sample_params.scheduler == SCHEDULER_COUNT) {
-            LOG_ERROR("error: invalid scheduler %s",
-                      arg);
-            return -1;
-        }
+        sample_params.scheduler = arg;
         return 1;
     };
 
-    auto on_skip_layers_arg = [&](int argc, const char** argv, int index) {
-        if (++index >= argc) {
-            return -1;
-        }
-        std::string layers_str = argv[index];
-        if (layers_str[0] != '[' || layers_str[layers_str.size() - 1] != ']') {
-            return -1;
-        }
-
-        layers_str = layers_str.substr(1, layers_str.size() - 2);
-
-        std::regex regex("[, ]+");
-        std::sregex_token_iterator iter(layers_str.begin(), layers_str.end(), regex, -1);
-        std::sregex_token_iterator end;
-        std::vector<std::string> tokens(iter, end);
-        std::vector<int> layers;
-        for (const auto& token : tokens) {
-            try {
-                layers.push_back(std::stoi(token));
-            } catch (const std::invalid_argument&) {
-                return -1;
-            }
-        }
-        skip_layers = layers;
-        return 1;
-    };
-
-    auto on_high_noise_skip_layers_arg = [&](int argc, const char** argv, int index) {
-        if (++index >= argc) {
-            return -1;
-        }
-        std::string layers_str = argv[index];
-        if (layers_str[0] != '[' || layers_str[layers_str.size() - 1] != ']') {
-            return -1;
-        }
-
-        layers_str = layers_str.substr(1, layers_str.size() - 2);
-
-        std::regex regex("[, ]+");
-        std::sregex_token_iterator iter(layers_str.begin(), layers_str.end(), regex, -1);
-        std::sregex_token_iterator end;
-        std::vector<std::string> tokens(iter, end);
-        std::vector<int> layers;
-        for (const auto& token : tokens) {
-            try {
-                layers.push_back(std::stoi(token));
-            } catch (const std::invalid_argument&) {
-                return -1;
-            }
-        }
-        high_noise_skip_layers = layers;
-        return 1;
-    };
-
-    auto parse_sigmas_arg = [&](const char* value, std::vector<float>* target, const char* option_name) {
+    auto parse_sigmas_arg = [&](const char* value, std::optional<std::vector<float>>* target, const char* option_name) {
         if (target == nullptr || value == nullptr) {
             return -1;
         }
         std::string sigmas_str = value;
+        if (sigmas_str == "qwen-image-2.1-turbo") {
+            sigmas_str = "1.0,0.978453,0.95418,0.926626,0.89508,0.845148,0.704534,0.414568,0.0";
+        } else if (sigmas_str == "p-h3-image") {
+            sigmas_str = "1.0,0.984753,0.967905,0.951688,0.925372,0.881923,0.810083,0.528718,0.0";
+        } else if (sigmas_str == "minimax-h3-image") {
+            sigmas_str = "1.0,0.9675236940383911,0.8875485062599182,0.75,0.5327739119529724,0.23200887441635132,0.0";
+        } else if (sigmas_str == "hyperflow-h3-flash-4") {
+            sigmas_str = "1.0,0.962575853,0.755781889,0.312497854,0.0";
+        } else if (sigmas_str == "hyperflow-h3-flash-6") {
+            sigmas_str = "1.0,0.982655942,0.914642572,0.674755692,0.385223746,0.159055337,0.0";
+        } else if (sigmas_str == "hyperflow-h3-flash-8") {
+            sigmas_str = "1.0,0.993909776,0.9842875,0.966063678,0.923076928,0.834942341,0.696852028,0.468753338,0.0";
+        }
         if (!sigmas_str.empty() && sigmas_str.front() == '[') {
             sigmas_str.erase(0, 1);
         }
@@ -1476,7 +1341,7 @@ ArgOptions SDGenerationParams::get_options() {
             sigmas_str.pop_back();
         }
 
-        size_t before = target->size();
+        std::vector<float> parsed;
         std::stringstream ss(sigmas_str);
         std::string item;
         while (std::getline(ss, item, ',')) {
@@ -1484,7 +1349,7 @@ ArgOptions SDGenerationParams::get_options() {
             item.erase(item.find_last_not_of(" \t\n\r\f\v") + 1);
             if (!item.empty()) {
                 try {
-                    target->push_back(std::stof(item));
+                    parsed.push_back(std::stof(item));
                 } catch (const std::invalid_argument&) {
                     LOG_ERROR("error: invalid float value '%s' in %s", item.c_str(), option_name);
                     return -1;
@@ -1495,10 +1360,11 @@ ArgOptions SDGenerationParams::get_options() {
             }
         }
 
-        if (target->size() == before && !sigmas_str.empty()) {
+        if (parsed.empty() && !sigmas_str.empty()) {
             LOG_ERROR("error: could not parse any sigma values from '%s'", value);
             return -1;
         }
+        *target = std::move(parsed);
         return 1;
     };
 
@@ -1520,7 +1386,7 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        ref_image_paths.push_back(argv[index]);
+        ref_image_paths.push_back(argv_to_utf8(index, argv));
         return 1;
     };
 
@@ -1528,7 +1394,7 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        ref_video_paths.push_back(argv[index]);
+        ref_video_paths.push_back(argv_to_utf8(index, argv));
         return 1;
     };
 
@@ -1536,7 +1402,7 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        ref_video_audio_paths.push_back(argv[index]);
+        ref_video_audio_paths.push_back(argv_to_utf8(index, argv));
         return 1;
     };
 
@@ -1544,7 +1410,7 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        ref_audio_paths.push_back(argv[index]);
+        ref_audio_paths.push_back(argv_to_utf8(index, argv));
         return 1;
     };
 
@@ -1552,7 +1418,7 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        ref_audio_paths.push_back(argv[index]);
+        ref_audio_paths.push_back(argv_to_utf8(index, argv));
         return 1;
     };
 
@@ -1651,15 +1517,15 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        const char* arg = argv[index];
-        std::ifstream f(arg, std::ios::binary);
+        const std::string arg = argv_to_utf8(index, argv);
+        std::ifstream f(fs::u8path(arg), std::ios::binary);
         try {
             prompt = std::string(std::istreambuf_iterator<char>{f}, {});
         } catch (const std::ios_base::failure&) {
             f.setstate(std::ios_base::failbit);
         }
         if (f.fail()) {
-            LOG_ERROR("error: failed to read prompt file '%s'\n", arg);
+            LOG_ERROR("error: failed to read prompt file '%s'\n", arg.c_str());
             return -1;
         }
         return 1;
@@ -1669,34 +1535,37 @@ ArgOptions SDGenerationParams::get_options() {
         if (++index >= argc) {
             return -1;
         }
-        const char* arg = argv[index];
-        std::ifstream f(arg, std::ios::binary);
+        const std::string arg = argv_to_utf8(index, argv);
+        std::ifstream f(fs::u8path(arg), std::ios::binary);
         try {
             negative_prompt = std::string(std::istreambuf_iterator<char>{f}, {});
         } catch (const std::ios_base::failure&) {
             f.setstate(std::ios_base::failbit);
         }
         if (f.fail()) {
-            LOG_ERROR("error: failed to read negative prompt file '%s'\n", arg);
+            LOG_ERROR("error: failed to read negative prompt file '%s'\n", arg.c_str());
             return -1;
         }
         return 1;
     };
 
-    std::string sample_methods = sample_method_to_str[0];
-    for (int i = 1; i < SAMPLE_METHOD_COUNT; i++) {
-        sample_methods += ", " + std::string(sample_method_to_str[i]);
+    std::string sample_methods;
+    for (const char* name : example_options::sample_methods) {
+        if (!sample_methods.empty())
+            sample_methods += ", ";
+        sample_methods += name;
     }
-
-    std::string schedulers = scheduler_to_str[0];
-    for (int i = 1; i < SCHEDULER_COUNT; i++) {
-        schedulers += ", " + std::string(scheduler_to_str[i]);
+    std::string schedulers;
+    for (const char* name : example_options::schedulers) {
+        if (!schedulers.empty())
+            schedulers += ", ";
+        schedulers += name;
     }
 
     options.manual_options = {
         {"-s",
          "--seed",
-         "RNG seed (default: 42, use random seed for < 0)",
+         "RNG seed (default: " + (seed ? std::to_string(*seed) : "random") + "); a negative value requests a random seed",
          on_seed_arg},
         {"",
          "--sampling-method",
@@ -1704,42 +1573,29 @@ ArgOptions SDGenerationParams::get_options() {
                                                         "default: euler for Flux/SD3/Wan, euler_a otherwise",
          on_sample_method_arg},
         {"",
-         "--high-noise-sampling-method",
-         "(high noise) sampling method, one of [" + sample_methods + "], "
-                                                                     "default: euler for Flux/SD3/Wan, euler_a otherwise",
-         on_high_noise_sample_method_arg},
-        {"",
          "--scheduler",
          "denoiser sigma scheduler, one of [" + schedulers + "], "
                                                              "alias: normal=discrete, default: model-specific",
          on_scheduler_arg},
         {"",
          "--sigmas",
-         "custom sigma values for the sampler, comma-separated (e.g., \"14.61,7.8,3.5,0.0\").",
+         "custom sigma values for the sampler, comma-separated (e.g., \"14.61,7.8,3.5,0.0\") or preset: qwen-image-2.1-turbo, p-h3-image, minimax-h3-image, hyperflow-h3-flash-4, hyperflow-h3-flash-6, hyperflow-h3-flash-8.",
          on_sigmas_arg},
         {"",
          "--hires-sigmas",
-         "custom sigma values for the highres fix second pass, comma-separated (e.g., \"0.85,0.725,0.421875,0.0\").",
+         "custom sigma values for the highres fix second pass, comma-separated (e.g., \"0.85,0.725,0.421875,0.0\") or preset: qwen-image-2.1-turbo, p-h3-image, minimax-h3-image, hyperflow-h3-flash-4, hyperflow-h3-flash-6, hyperflow-h3-flash-8.",
          on_hires_sigmas_arg},
-        {"",
-         "--skip-layers",
-         "layers to skip for SLG steps (default: [7,8,9])",
-         on_skip_layers_arg},
-        {"",
-         "--high-noise-skip-layers",
-         "(high noise) layers to skip for SLG steps (default: [7,8,9])",
-         on_high_noise_skip_layers_arg},
         {"-r",
          "--ref-image",
          "reference image for Flux Kontext or MiniMax-H3 Ref2VA (can be used multiple times)",
          on_ref_image_arg},
         {"",
          "--ref-video",
-         "MiniMax-H3 Ref2VA reference video frame directory at 24 fps (can be used multiple times)",
+         "MiniMax-H3 Ref2VA reference video file or frame directory, sampled at 24 fps (can be used multiple times)",
          on_ref_video_arg},
         {"",
          "--ref-video-audio",
-         "WAV soundtrack paired by index with --ref-video (can be used multiple times)",
+         "WAV soundtrack overriding embedded audio, paired by index with --ref-video (can be used multiple times)",
          on_ref_video_audio_arg},
         {"",
          "--ref-audio",
@@ -1751,11 +1607,11 @@ ArgOptions SDGenerationParams::get_options() {
          on_audio_arg},
         {"",
          "--cache-mode",
-         "caching method: 'easycache' (DiT), 'ucache' (UNET), 'dbcache'/'taylorseer'/'cache-dit' (DiT block-level), 'spectrum' (UNET/DiT Chebyshev+Taylor forecasting)",
+         "caching method: 'easycache' (DiT), 'ucache' (UNET), 'dbcache'/'taylorseer'/'cache-dit' (DiT condition-level), 'spectrum' (UNET/DiT Chebyshev+Taylor forecasting)",
          on_cache_mode_arg},
         {"",
          "--cache-option",
-         "named cache params (key=value format, comma-separated). easycache/ucache: threshold=,start=,end=,decay=,relative=,reset=; dbcache/taylorseer/cache-dit: Fn=,Bn=,threshold=,warmup=; spectrum: w=,m=,lam=,window=,flex=,warmup=,stop=. Examples: \"threshold=0.25\" or \"threshold=1.5,reset=0\"",
+         "named cache params (key=value format, comma-separated). easycache/ucache: threshold=,start=,end=,decay=,relative=,reset=; dbcache/taylorseer/cache-dit: threshold=,warmup= (Fn/Bn are ignored with a warning); spectrum: w=,m=,lam=,window=,flex=,warmup=,stop=. Examples: \"threshold=0.25\" or \"threshold=1.5,reset=0\"",
          on_cache_option_arg},
         {"",
          "--scm-mask",
@@ -1897,6 +1753,7 @@ static bool parse_image_json_field(const json& parent,
     return decode_base64_image(parent.at(key).get<std::string>(), channels, 0, 0, out_image);
 }
 
+/** Parses a JSON array of base64 image strings into owned images. */
 static bool parse_image_array_json_field(const json& parent,
                                          const char* key,
                                          int channels,
@@ -1922,6 +1779,84 @@ static bool parse_image_array_json_field(const json& parent,
             return false;
         }
         out_images.push_back(std::move(image));
+    }
+    return true;
+}
+
+/** Parses a JSON array of base64 WAV strings into owned audio clips. */
+static bool parse_audio_array_json_field(const json& parent,
+                                         const char* key,
+                                         std::vector<SDAudioOwner>& out_audios) {
+    if (!parent.contains(key)) {
+        return true;
+    }
+    if (parent.at(key).is_null()) {
+        out_audios.clear();
+        return true;
+    }
+    if (!parent.at(key).is_array()) {
+        return false;
+    }
+
+    out_audios.clear();
+    for (const auto& item : parent.at(key)) {
+        if (!item.is_string()) {
+            return false;
+        }
+        std::string encoded = item.get<std::string>();
+        auto comma_pos      = encoded.find(',');
+        if (comma_pos != std::string::npos) {
+            encoded = encoded.substr(comma_pos + 1);
+        }
+        std::vector<uint8_t> audio_bytes = decode_base64_bytes(encoded);
+        if (audio_bytes.empty()) {
+            return false;
+        }
+        std::vector<float> samples;
+        uint32_t sample_rate = 0;
+        uint32_t channels    = 0;
+        if (!load_wav_from_memory(audio_bytes.data(), audio_bytes.size(), samples, sample_rate, channels)) {
+            return false;
+        }
+        SDAudioOwner audio;
+        audio.reset(std::move(samples), sample_rate, channels);
+        out_audios.push_back(std::move(audio));
+    }
+    return true;
+}
+
+/** Parses a JSON array of per-video base64 frame arrays into owned videos. */
+static bool parse_video_array_json_field(const json& parent,
+                                         const char* key,
+                                         std::vector<std::vector<SDImageOwner>>& out_videos) {
+    if (!parent.contains(key)) {
+        return true;
+    }
+    if (parent.at(key).is_null()) {
+        out_videos.clear();
+        return true;
+    }
+    if (!parent.at(key).is_array()) {
+        return false;
+    }
+
+    out_videos.clear();
+    for (const auto& video : parent.at(key)) {
+        if (!video.is_array() || video.empty()) {
+            return false;
+        }
+        std::vector<SDImageOwner> frames;
+        for (const auto& frame : video) {
+            if (!frame.is_string()) {
+                return false;
+            }
+            SDImageOwner image;
+            if (!decode_base64_image(frame.get<std::string>(), 0, 0, 0, image)) {
+                return false;
+            }
+            frames.push_back(std::move(image));
+        }
+        out_videos.push_back(std::move(frames));
     }
     return true;
 }
@@ -1998,58 +1933,88 @@ static bool resolve_model_file_from_dir(const std::string& model_name,
     if (model_name.empty() ||
         model_name.find('/') != std::string::npos ||
         model_name.find('\\') != std::string::npos ||
-        fs::path(model_name).has_root_path() ||
+        fs::u8path(model_name).has_root_path() ||
         ends_with_valid_ext()) {
         LOG_ERROR("%s must be a model name without path or extension: %s", label, model_name.c_str());
         return false;
     }
 
-    fs::path model_dir_path = model_dir;
+    fs::path model_dir_path = fs::u8path(model_dir);
+    const auto bundle       = model_dir_path / fs::u8path(model_name);
+    if (model_name != "." && model_name != ".." && fs::is_regular_file(bundle / "transformer" / "config.json")) {
+        resolved_path = bundle.lexically_normal().u8string();
+        return true;
+    }
     for (const auto& ext : valid_ext) {
-        fs::path try_path = model_dir_path / (model_name + ext);
+        fs::path try_path = model_dir_path / fs::u8path(model_name + ext);
         if (fs::exists(try_path) && fs::is_regular_file(try_path)) {
-            resolved_path = try_path.lexically_normal().string();
+            resolved_path = try_path.lexically_normal().u8string();
             return true;
         }
     }
 
-    const auto bundle = model_dir_path / model_name;
-    if (model_name != "." && model_name != ".." && fs::is_directory(bundle) &&
-        fs::is_regular_file(bundle / "transformer" / "config.json") &&
-        get_upscaler_model_scale(bundle.u8string().c_str()) > 0) {
-        resolved_path = bundle.lexically_normal().string();
-        return true;
-    }
-    LOG_ERROR("can not find %s %s in %s", label, model_name.c_str(), model_dir_path.lexically_normal().string().c_str());
+    LOG_ERROR("can not find %s %s in %s", label, model_name.c_str(), model_dir_path.lexically_normal().u8string().c_str());
     return false;
 }
 
-bool SDGenerationParams::parse_image_preprocess_json(const std::string& json_str) {
-    const auto value = json::parse(json_str, nullptr, false);
-    std::string rules;
-    if (value.is_string()) {
-        rules = value.get<std::string>();
-    } else if (value.is_array()) {
-        for (const auto& item : value) {
-            if (!item.is_string()) {
-                LOG_ERROR("image_preprocess must contain rule strings");
-                return false;
-            }
-            if (!rules.empty())
-                rules += ";";
-            rules += item.get<std::string>();
-        }
-    } else {
-        LOG_ERROR("image_preprocess must be a string or array of strings");
+bool SDGenerationParams::parse_prompt_images_json(const std::string& json_str) {
+    auto images = json::parse(json_str, nullptr, false);
+    if (!images.is_object()) {
         return false;
     }
-    image_preprocess = std::move(rules);
+    std::map<std::string, SDImageOwner> decoded;
+    for (auto it = images.begin(); it != images.end(); ++it) {
+        if (it.key().empty() || it.key().find('>') != std::string::npos || !it.value().is_string()) {
+            return false;
+        }
+        SDImageOwner image;
+        if (!decode_base64_image(it.value().get<std::string>(), 3, 0, 0, image)) {
+            return false;
+        }
+        decoded.emplace(it.key(), std::move(image));
+    }
+    prompt_images = std::move(decoded);
     return true;
 }
 
+template <typename Field>
+static void load_json_input(const json& object, const char* key, Field& out) {
+    if (!object.contains(key))
+        return;
+    const auto& value = object.at(key);
+    if (value.is_null()) {
+        out = Field{};
+        return;
+    }
+    using T    = typename InputType<Field>::type;
+    bool valid = false;
+    if constexpr (std::is_same_v<T, std::string>)
+        valid = value.is_string();
+    else if constexpr (std::is_same_v<T, bool>)
+        valid = value.is_boolean();
+    else if constexpr (std::is_integral_v<T>) {
+        valid = value.is_number_integer();
+        if (valid) {
+            if (value.is_number_unsigned())
+                valid = value.get<uint64_t>() <= static_cast<uint64_t>(std::numeric_limits<T>::max());
+            else {
+                const auto integer = value.get<int64_t>();
+                valid              = integer >= std::numeric_limits<T>::min() && integer <= std::numeric_limits<T>::max();
+            }
+        }
+    } else if constexpr (std::is_floating_point_v<T>)
+        valid = value.is_number();
+    else
+        valid = value.is_array();
+    if (!valid)
+        throw std::invalid_argument(std::string(key) + ": invalid value type or range");
+    out = value.get<T>();
+}
+
+/** Populates generation params from a JSON payload (server APIs); returns false on any malformed field. */
 bool SDGenerationParams::from_json_str(
     const std::string& json_str,
-    const std::function<std::string(const std::string&)>& lora_path_resolver) {
+    const std::function<std::string(const std::string&)>& lora_path_resolver) try {
     json j;
     try {
         j = json::parse(json_str);
@@ -2058,36 +2023,15 @@ bool SDGenerationParams::from_json_str(
         return false;
     }
 
-    if (j.contains("image_preprocess") && !parse_image_preprocess_json(j["image_preprocess"].dump()))
+    if (j.contains("image_preprocess"))
+        throw std::invalid_argument("image_preprocess requires a DGL script");
+    if (j.contains("prompt_images") && !parse_prompt_images_json(j["prompt_images"].dump()))
         return false;
 
-    auto load_if_exists = [&](const char* key, auto& out) {
-        if (j.contains(key)) {
-            using T = std::decay_t<decltype(out)>;
-            if constexpr (std::is_same_v<T, std::string>) {
-                if (j[key].is_string())
-                    out = j[key];
-            } else if constexpr (std::is_same_v<T, int> || std::is_same_v<T, int64_t>) {
-                if (j[key].is_number_integer())
-                    out = j[key];
-            } else if constexpr (std::is_same_v<T, float>) {
-                if (j[key].is_number())
-                    out = j[key];
-            } else if constexpr (std::is_same_v<T, bool>) {
-                if (j[key].is_boolean())
-                    out = j[key];
-            } else if constexpr (std::is_same_v<T, std::vector<int>>) {
-                if (j[key].is_array())
-                    out = j[key].get<std::vector<int>>();
-            } else if constexpr (std::is_same_v<T, std::vector<float>>) {
-                if (j[key].is_array())
-                    out = j[key].get<std::vector<float>>();
-            } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
-                if (j[key].is_array())
-                    out = j[key].get<std::vector<std::string>>();
-            }
-        }
-    };
+    if ((j.contains("ref_image_args") && j["ref_image_args"] != "") ||
+        (j.contains("increase_ref_index") && j["increase_ref_index"] != false))
+        throw std::invalid_argument("reference overrides require a DGL script");
+    auto load_if_exists = [&](const char* key, auto& out) { load_json_input(j, key, out); };
 
     load_if_exists("prompt", prompt);
     load_if_exists("negative_prompt", negative_prompt);
@@ -2098,7 +2042,6 @@ bool SDGenerationParams::from_json_str(
     load_if_exists("cache_mode", cache_mode);
     load_if_exists("cache_option", cache_option);
     load_if_exists("scm_mask", scm_mask);
-    load_if_exists("ref_image_args", ref_image_args);
 
     load_if_exists("clip_skip", clip_skip);
     load_if_exists("width", width);
@@ -2113,106 +2056,51 @@ bool SDGenerationParams::from_json_str(
 
     load_if_exists("strength", strength);
     load_if_exists("control_strength", control_strength);
+    load_if_exists("control_type", control_type);
     load_if_exists("ip_adapter_strength", ip_adapter_strength);
     load_if_exists("moe_boundary", moe_boundary);
     load_if_exists("vace_strength", vace_strength);
 
-    load_if_exists("increase_ref_index", increase_ref_index);
     load_if_exists("embed_image_metadata", embed_image_metadata);
 
     if (j.contains("hires") && j["hires"].is_object()) {
         const json& hires_json = j["hires"];
-        if (hires_json.contains("enabled") && hires_json["enabled"].is_boolean()) {
-            hires_enabled = hires_json["enabled"];
-        }
-        if (hires_json.contains("upscaler") && hires_json["upscaler"].is_string()) {
-            hires_upscaler = hires_json["upscaler"];
-        }
-        if (hires_json.contains("scale") && hires_json["scale"].is_number()) {
-            hires_scale = hires_json["scale"];
-        }
-        if (hires_json.contains("target_width") && hires_json["target_width"].is_number_integer()) {
-            hires_width = hires_json["target_width"];
-        }
-        if (hires_json.contains("target_height") && hires_json["target_height"].is_number_integer()) {
-            hires_height = hires_json["target_height"];
-        }
-        if (hires_json.contains("steps") && hires_json["steps"].is_number_integer()) {
-            hires_steps = hires_json["steps"];
-        }
-        if (hires_json.contains("denoising_strength") && hires_json["denoising_strength"].is_number()) {
-            hires_denoising_strength = hires_json["denoising_strength"];
-        }
-        if (hires_json.contains("custom_sigmas") && hires_json["custom_sigmas"].is_array()) {
-            hires_custom_sigmas = hires_json["custom_sigmas"].get<std::vector<float>>();
-        }
-        if (hires_json.contains("upscale_tile_size") && hires_json["upscale_tile_size"].is_number_integer()) {
-            hires_upscale_tile_size = hires_json["upscale_tile_size"];
-        }
+        load_json_input(hires_json, "enabled", hires_enabled);
+        load_json_input(hires_json, "upscaler", hires_upscaler);
+        load_json_input(hires_json, "scale", hires_scale);
+        load_json_input(hires_json, "target_width", hires_width);
+        load_json_input(hires_json, "target_height", hires_height);
+        load_json_input(hires_json, "steps", hires_steps);
+        load_json_input(hires_json, "denoising_strength", hires_denoising_strength);
+        load_json_input(hires_json, "custom_sigmas", hires_custom_sigmas);
+        load_json_input(hires_json, "upscale_tile_size", hires_upscale_tile_size);
     }
 
     auto parse_sample_params_json = [&](const json& sample_json,
-                                        sd_sample_params_t& target_params,
+                                        SDSampleParams& target_params,
                                         std::string& target_extra_sample_args,
-                                        std::vector<int>& target_skip_layers,
-                                        std::vector<float>* target_custom_sigmas) {
-        if (sample_json.contains("sample_steps") && sample_json["sample_steps"].is_number_integer()) {
-            target_params.sample_steps = sample_json["sample_steps"];
-        }
-        if (sample_json.contains("eta") && sample_json["eta"].is_number()) {
-            target_params.eta = sample_json["eta"];
-        }
-        if (sample_json.contains("shifted_timestep") && sample_json["shifted_timestep"].is_number_integer()) {
-            target_params.shifted_timestep = sample_json["shifted_timestep"];
-        }
-        if (sample_json.contains("flow_shift") && sample_json["flow_shift"].is_number()) {
-            target_params.flow_shift = sample_json["flow_shift"];
-        }
-        if (sample_json.contains("extra_sample_args") && sample_json["extra_sample_args"].is_string()) {
-            target_extra_sample_args = sample_json["extra_sample_args"].get<std::string>();
-        }
-        if (target_custom_sigmas != nullptr &&
-            sample_json.contains("custom_sigmas") &&
-            sample_json["custom_sigmas"].is_array()) {
-            *target_custom_sigmas = sample_json["custom_sigmas"].get<std::vector<float>>();
-        }
-        if (sample_json.contains("sample_method") && sample_json["sample_method"].is_string()) {
-            enum sample_method_t tmp = str_to_sample_method(sample_json["sample_method"].get<std::string>().c_str());
-            if (tmp != SAMPLE_METHOD_COUNT) {
-                target_params.sample_method = tmp;
-            }
-        }
-        if (sample_json.contains("scheduler") && sample_json["scheduler"].is_string()) {
-            enum scheduler_t tmp = str_to_scheduler(sample_json["scheduler"].get<std::string>().c_str());
-            if (tmp != SCHEDULER_COUNT) {
-                target_params.scheduler = tmp;
-            }
-        }
+                                        std::optional<std::vector<int>>& target_skip_layers,
+                                        std::optional<std::vector<float>>* target_custom_sigmas) {
+        load_json_input(sample_json, "sample_steps", target_params.sample_steps);
+        load_json_input(sample_json, "eta", target_params.eta);
+        load_json_input(sample_json, "shifted_timestep", target_params.shifted_timestep);
+        load_json_input(sample_json, "flow_shift", target_params.flow_shift);
+        load_json_input(sample_json, "extra_sample_args", target_extra_sample_args);
+        if (target_custom_sigmas)
+            load_json_input(sample_json, "custom_sigmas", *target_custom_sigmas);
+        load_json_input(sample_json, "sample_method", target_params.sample_method);
+        load_json_input(sample_json, "scheduler", target_params.scheduler);
         if (sample_json.contains("guidance") && sample_json["guidance"].is_object()) {
             const json& guidance_json = sample_json["guidance"];
-            if (guidance_json.contains("txt_cfg") && guidance_json["txt_cfg"].is_number()) {
-                target_params.guidance.txt_cfg = guidance_json["txt_cfg"];
-            }
-            if (guidance_json.contains("img_cfg") && guidance_json["img_cfg"].is_number()) {
-                target_params.guidance.img_cfg = guidance_json["img_cfg"];
-            }
-            if (guidance_json.contains("distilled_guidance") && guidance_json["distilled_guidance"].is_number()) {
-                target_params.guidance.distilled_guidance = guidance_json["distilled_guidance"];
-            }
+            load_json_input(guidance_json, "txt_cfg", target_params.guidance.txt_cfg);
+            load_json_input(guidance_json, "img_cfg", target_params.guidance.img_cfg);
+            load_json_input(guidance_json, "distilled_guidance", target_params.guidance.distilled_guidance);
             if (guidance_json.contains("slg") && guidance_json["slg"].is_object()) {
                 const json& slg_json = guidance_json["slg"];
-                if (slg_json.contains("layers") && slg_json["layers"].is_array()) {
-                    target_skip_layers = slg_json["layers"].get<std::vector<int>>();
-                }
-                if (slg_json.contains("layer_start") && slg_json["layer_start"].is_number()) {
-                    target_params.guidance.slg.layer_start = slg_json["layer_start"];
-                }
-                if (slg_json.contains("layer_end") && slg_json["layer_end"].is_number()) {
-                    target_params.guidance.slg.layer_end = slg_json["layer_end"];
-                }
-                if (slg_json.contains("scale") && slg_json["scale"].is_number()) {
-                    target_params.guidance.slg.scale = slg_json["scale"];
-                }
+                load_json_input(slg_json, "layers", target_skip_layers);
+                load_json_input(slg_json, "layer_start", target_params.guidance.slg.layer_start);
+                load_json_input(slg_json, "layer_end", target_params.guidance.slg.layer_end);
+                load_json_input(slg_json, "scale", target_params.guidance.slg.scale);
             }
         }
     };
@@ -2230,30 +2118,14 @@ bool SDGenerationParams::from_json_str(
 
     if (j.contains("vae_tiling_params") && j["vae_tiling_params"].is_object()) {
         const json& tiling_json = j["vae_tiling_params"];
-        if (tiling_json.contains("enabled") && tiling_json["enabled"].is_boolean()) {
-            vae_tiling_params.enabled = tiling_json["enabled"];
-        }
-        if (tiling_json.contains("temporal_tiling") && tiling_json["temporal_tiling"].is_boolean()) {
-            vae_tiling_params.temporal_tiling = tiling_json["temporal_tiling"];
-        }
-        if (tiling_json.contains("tile_size_w") && tiling_json["tile_size_w"].is_number_integer()) {
-            vae_tiling_params.tile_size_w = tiling_json["tile_size_w"];
-        }
-        if (tiling_json.contains("tile_size_h") && tiling_json["tile_size_h"].is_number_integer()) {
-            vae_tiling_params.tile_size_h = tiling_json["tile_size_h"];
-        }
-        if (tiling_json.contains("target_overlap") && tiling_json["target_overlap"].is_number()) {
-            vae_tiling_params.target_overlap = tiling_json["target_overlap"];
-        }
-        if (tiling_json.contains("rel_size_w") && tiling_json["rel_size_w"].is_number()) {
-            vae_tiling_params.rel_size_w = tiling_json["rel_size_w"];
-        }
-        if (tiling_json.contains("rel_size_h") && tiling_json["rel_size_h"].is_number()) {
-            vae_tiling_params.rel_size_h = tiling_json["rel_size_h"];
-        }
-        if (tiling_json.contains("extra_tiling_args") && tiling_json["extra_tiling_args"].is_string()) {
-            extra_tiling_args = tiling_json["extra_tiling_args"].get<std::string>();
-        }
+        load_json_input(tiling_json, "enabled", vae_tiling_params.enabled);
+        load_json_input(tiling_json, "temporal_tiling", vae_tiling_params.temporal_tiling);
+        load_json_input(tiling_json, "tile_size_w", vae_tiling_params.tile_size_w);
+        load_json_input(tiling_json, "tile_size_h", vae_tiling_params.tile_size_h);
+        load_json_input(tiling_json, "target_overlap", vae_tiling_params.target_overlap);
+        load_json_input(tiling_json, "rel_size_w", vae_tiling_params.rel_size_w);
+        load_json_input(tiling_json, "rel_size_h", vae_tiling_params.rel_size_h);
+        load_json_input(tiling_json, "extra_tiling_args", extra_tiling_args);
     }
 
     if (!parse_lora_json_field(j, lora_path_resolver, lora_map, high_noise_lora_map)) {
@@ -2275,22 +2147,29 @@ bool SDGenerationParams::from_json_str(
         return false;
     }
     if (!parse_image_array_json_field(j, "ref_images", 0, ref_images) ||
-        !parse_image_array_json_field(j, "control_frames", 3, control_frames)) {
-        LOG_ERROR("invalid input image array");
+        !parse_image_array_json_field(j, "control_frames", 3, control_frames) ||
+        !parse_audio_array_json_field(j, "ref_audios", ref_audios) ||
+        !parse_audio_array_json_field(j, "ref_video_audios", ref_video_audios) ||
+        !parse_video_array_json_field(j, "ref_videos", ref_videos)) {
+        LOG_ERROR("invalid input image/audio/video array");
         return false;
     }
 
     return true;
+} catch (const std::exception& error) {
+    LOG_ERROR("invalid generation parameters: %s", error.what());
+    return false;
 }
 
-void SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_dir) {
+bool SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_dir) {
     if (lora_model_dir.empty()) {
-        return;
+        return true;
     }
     static const std::regex re(R"(<lora:([^:>]+):([^>]+)>)");
     static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt", ".ckpt"};
     std::smatch m;
 
+    bool missing    = false;
     std::string tmp = prompt;
 
     while (std::regex_search(tmp, m, re)) {
@@ -2314,10 +2193,18 @@ void SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_d
         }
 
         fs::path final_path;
-        if (is_absolute_path(raw_path)) {
-            final_path = raw_path;
-        } else {
-            final_path = fs::path(lora_model_dir) / raw_path;
+        try {
+            if (is_absolute_path(raw_path)) {
+                final_path = fs::u8path(raw_path);
+            } else {
+                final_path = fs::u8path(lora_model_dir) / fs::u8path(raw_path);
+            }
+        } catch (const std::exception&) {  // not UTF-8, e.g. a prompt file in another encoding
+            LOG_WARN("invalid lora path %s", raw_path.c_str());
+            tmp     = m.suffix().str();
+            prompt  = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+            missing = true;
+            continue;
         }
         if (!fs::exists(final_path)) {
             bool found = false;
@@ -2331,14 +2218,15 @@ void SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_d
                 }
             }
             if (!found) {
-                LOG_WARN("can not found lora %s", final_path.lexically_normal().string().c_str());
-                tmp    = m.suffix().str();
-                prompt = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+                LOG_WARN("can not found lora %s", final_path.lexically_normal().u8string().c_str());
+                tmp     = m.suffix().str();
+                prompt  = std::regex_replace(prompt, re, "", std::regex_constants::format_first_only);
+                missing = true;
                 continue;
             }
         }
 
-        const std::string key = final_path.lexically_normal().string();
+        const std::string key = final_path.lexically_normal().u8string();
 
         if (is_high_noise)
             high_noise_lora_map[key] += mul;
@@ -2349,30 +2237,31 @@ void SDGenerationParams::extract_and_remove_lora(const std::string& lora_model_d
 
         tmp = m.suffix().str();
     }
+
+    return !missing;
 }
 
 bool SDGenerationParams::width_and_height_are_set() const {
-    return width > 0 && height > 0;
+    return width.has_value() && height.has_value();
 }
 
 void SDGenerationParams::set_width_and_height_if_unset(int w, int h) {
-    if (!width_and_height_are_set()) {
-        LOG_INFO("set width x height to %d x %d", w, h);
-        width  = w;
+    if (!width)
+        width = w;
+    if (!height)
         height = h;
-    }
 }
 
-int SDGenerationParams::get_resolved_width() const {
-    return (width > 0) ? width : 512;
+int SDGenerationParams::get_requested_width() const {
+    return width.value_or(0);
 }
 
-int SDGenerationParams::get_resolved_height() const {
-    return (height > 0) ? height : 512;
+int SDGenerationParams::get_requested_height() const {
+    return height.value_or(0);
 }
 
 bool SDGenerationParams::initialize_cache_params() {
-    sd_cache_params_init(&cache_params);
+    cache_params = SDCacheParams{};
 
     auto parse_named_params = [&](const std::string& opt_str) -> bool {
         std::stringstream ss(opt_str);
@@ -2402,10 +2291,10 @@ bool SDGenerationParams::initialize_cache_params() {
                     cache_params.use_relative_threshold = (std::stof(val) != 0.0f);
                 } else if (key == "reset") {
                     cache_params.reset_error_on_compute = (std::stof(val) != 0.0f);
-                } else if (key == "Fn" || key == "fn") {
-                    cache_params.Fn_compute_blocks = std::stoi(val);
-                } else if (key == "Bn" || key == "bn") {
-                    cache_params.Bn_compute_blocks = std::stoi(val);
+                } else if (key == "Fn" || key == "fn" || key == "Bn" || key == "bn") {
+                    if (std::stoi(val) < 0)
+                        throw std::out_of_range("block count must be nonnegative");
+                    LOG_WARN("cache option '%s' is ignored: condition-level caching does not support front/back block counts", key.c_str());
                 } else if (key == "warmup") {
                     if (cache_mode == "spectrum") {
                         cache_params.spectrum_warmup_steps = std::stoi(val);
@@ -2438,19 +2327,19 @@ bool SDGenerationParams::initialize_cache_params() {
 
     if (!cache_mode.empty()) {
         if (cache_mode == "disabled") {
-            cache_params.mode = SD_CACHE_DISABLED;
+            cache_params.mode = "disabled";
         } else if (cache_mode == "easycache") {
-            cache_params.mode = SD_CACHE_EASYCACHE;
+            cache_params.mode = "easycache";
         } else if (cache_mode == "ucache") {
-            cache_params.mode = SD_CACHE_UCACHE;
+            cache_params.mode = "ucache";
         } else if (cache_mode == "dbcache") {
-            cache_params.mode = SD_CACHE_DBCACHE;
+            cache_params.mode = "dbcache";
         } else if (cache_mode == "taylorseer") {
-            cache_params.mode = SD_CACHE_TAYLORSEER;
+            cache_params.mode = "taylorseer";
         } else if (cache_mode == "cache-dit") {
-            cache_params.mode = SD_CACHE_CACHE_DIT;
+            cache_params.mode = "cache_dit";
         } else if (cache_mode == "spectrum") {
-            cache_params.mode = SD_CACHE_SPECTRUM;
+            cache_params.mode = "spectrum";
         } else {
             LOG_ERROR("error: invalid cache mode '%s'", cache_mode.c_str());
             return false;
@@ -2461,184 +2350,93 @@ bool SDGenerationParams::initialize_cache_params() {
         return false;
     }
 
-    if (cache_params.mode == SD_CACHE_DBCACHE ||
-        cache_params.mode == SD_CACHE_TAYLORSEER ||
-        cache_params.mode == SD_CACHE_CACHE_DIT) {
+    if (cache_params.mode == "dbcache" ||
+        cache_params.mode == "taylorseer" ||
+        cache_params.mode == "cache_dit") {
         cache_params.scm_policy_dynamic = scm_policy_dynamic;
     }
 
     return true;
 }
 
-bool SDGenerationParams::resolve(const std::string& lora_model_dir, const std::string& hires_upscalers_dir, bool strict) {
+bool SDGenerationParams::resolve(const std::string& lora_model_dir, const std::string& hires_upscalers_dir, bool strict, bool validate_missing_loras) {
     vae_tiling_params.extra_tiling_args = extra_tiling_args.empty() ? nullptr : extra_tiling_args.c_str();
-
-    if (high_noise_sample_params.sample_steps <= 0) {
-        high_noise_sample_params.sample_steps = -1;
-    }
 
     if (!initialize_cache_params()) {
         return false;
     }
 
-    if (seed < 0) {
-        srand((int)time(nullptr));
-        seed = rand();
-    }
-
-    if (strict) {
-        batch_count                = std::clamp(batch_count, 1, 8);
-        sample_params.sample_steps = std::clamp(sample_params.sample_steps, 1, 100);
+    if (strict && ((batch_count && (*batch_count < 1 || *batch_count > 8)) ||
+                   (sample_params.sample_steps && (*sample_params.sample_steps < 1 || *sample_params.sample_steps > 100)))) {
+        LOG_ERROR("server requests require batch_count in [1, 8] and sample_steps in [1, 100]");
+        return false;
     }
 
     hires_upscaler_model_path.clear();
-    if (hires_enabled) {
-        if (hires_upscaler.empty()) {
-            hires_upscaler = "Latent";
-        }
-        resolved_hires_upscaler = str_to_sd_hires_upscaler(hires_upscaler.c_str());
-        if (resolved_hires_upscaler == SD_HIRES_UPSCALER_NONE) {
-            hires_enabled = false;
-        } else if (resolved_hires_upscaler == SD_HIRES_UPSCALER_COUNT) {
+    resolved_hires_upscaler.clear();
+    if (hires_upscaler) {
+        static const std::map<std::string, std::string> names = {
+            {"None", "none"}, {"Latent", "latent"}, {"Latent (nearest)", "latent_nearest"}, {"Latent (nearest-exact)", "latent_nearest_exact"}, {"Latent (antialiased)", "latent_antialiased"}, {"Latent (bicubic)", "latent_bicubic"}, {"Latent (bicubic antialiased)", "latent_bicubic_antialiased"}, {"Lanczos", "lanczos"}, {"Nearest", "nearest"}, {"Model", "model"}};
+        const auto it = names.find(*hires_upscaler);
+        if (it != names.end()) {
+            resolved_hires_upscaler = it->second;
+        } else if (std::any_of(names.begin(), names.end(), [&](const auto& name) { return name.second == *hires_upscaler; })) {
+            resolved_hires_upscaler = *hires_upscaler;
+        } else {
             static const std::vector<std::string> valid_ext = {".gguf", ".safetensors", ".pt", ".pth"};
-            if (!resolve_model_file_from_dir(hires_upscaler,
-                                             hires_upscalers_dir,
-                                             valid_ext,
-                                             "hires upscaler",
-                                             hires_upscaler_model_path)) {
+            if (hires_enabled.value_or(false) &&
+                !resolve_model_file_from_dir(*hires_upscaler, hires_upscalers_dir, valid_ext, "hires upscaler", hires_upscaler_model_path))
                 return false;
-            }
-            resolved_hires_upscaler = SD_HIRES_UPSCALER_MODEL;
+            resolved_hires_upscaler = "model";
         }
+        if (resolved_hires_upscaler == "none")
+            hires_enabled = false;
     }
 
     prompt_with_lora = prompt;
     if (!lora_model_dir.empty()) {
-        extract_and_remove_lora(lora_model_dir);
+        if (!extract_and_remove_lora(lora_model_dir) && validate_missing_loras) {
+            return false;
+        }
     }
     return true;
 }
 
+/** Validates params for a generation mode; enforces mode-specific input rules. */
 bool SDGenerationParams::validate(SDMode mode) {
-    if (!image_preprocess.empty() && mode != IMG_GEN && mode != VID_GEN) {
-        LOG_ERROR("--image-preprocess requires img_gen or vid_gen mode");
-        return false;
-    }
-    if (batch_count <= 0) {
-        LOG_ERROR("error: batch_count must be greater than 0");
-        return false;
-    }
-
-    if (qwen_image_layers < 0) {
-        LOG_ERROR("error: qwen_image_layers must be non-negative");
-        return false;
-    }
-
-    if (sample_params.sample_steps <= 0) {
-        LOG_ERROR("error: the sample_steps must be greater than 0\n");
-        return false;
-    }
-
-    if (strength < 0.f || strength > 1.f) {
-        LOG_ERROR("error: can only work with strength in [0.0, 1.0]\n");
-        return false;
-    }
-
-    if (sample_params.guidance.txt_cfg < 0.f) {
-        LOG_ERROR("error: cfg_scale must be positive");
-        return false;
-    }
-
-    if (!cache_mode.empty()) {
-        if (cache_mode == "easycache" || cache_mode == "ucache") {
-            if (cache_params.reuse_threshold < 0.0f) {
-                LOG_ERROR("error: cache threshold must be non-negative");
-                return false;
-            }
-            if (cache_params.start_percent < 0.0f || cache_params.start_percent >= 1.0f ||
-                cache_params.end_percent <= 0.0f || cache_params.end_percent > 1.0f ||
-                cache_params.start_percent >= cache_params.end_percent) {
-                LOG_ERROR("error: cache start/end percents must satisfy 0.0 <= start < end <= 1.0");
-                return false;
-            }
-        }
-    }
-
-    if (mode == VID_GEN && video_frames <= 0) {
-        return false;
-    }
-
-    if (mode == VID_GEN && fps <= 0) {
-        return false;
-    }
-
-    if (ref_video_audio_paths.size() > ref_video_paths.size()) {
+    if (ref_video_audio_paths.size() + ref_video_audios.size() > ref_video_paths.size() + ref_videos.size()) {
         LOG_ERROR("error: each --ref-video-audio needs a corresponding --ref-video");
         return false;
     }
 
-    if (mode != VID_GEN && (!ref_video_paths.empty() || !ref_video_audio_paths.empty() || !ref_audio_paths.empty())) {
+    if (mode != VID_GEN && (!ref_video_paths.empty() || !ref_video_audio_paths.empty() || !ref_audio_paths.empty() ||
+                            !ref_videos.empty() || !ref_video_audios.empty() || !ref_audios.empty())) {
         LOG_ERROR("error: reference video and audio inputs require vid_gen mode");
         return false;
     }
 
-    if (sample_params.shifted_timestep < 0 || sample_params.shifted_timestep > 1000) {
-        LOG_ERROR("error: shifted_timestep must be in range [0, 1000]");
-        return false;
-    }
-
-    if (upscale_factor != 2 && upscale_factor != 4) {
-        LOG_ERROR("error: --upscale-factor must be 2 or 4");
+    if (upscale_factor && upscale_factor != 2 && upscale_factor != 4) {
+        LOG_ERROR("upscale factor must be 2 or 4");
         return false;
     }
     if (upscale_repeats < 1) {
         return false;
     }
 
-    if (upscale_tile_size < 1) {
-        return false;
-    }
-
-    if (hires_enabled) {
-        if (hires_width < 0 || hires_height < 0) {
-            LOG_ERROR("error: hires target width and height must be >= 0");
-            return false;
-        }
-        if (hires_scale <= 0.f && hires_width <= 0 && hires_height <= 0) {
-            LOG_ERROR("error: hires scale must be positive when target size is not set");
-            return false;
-        }
-        if (hires_steps < 0) {
-            LOG_ERROR("error: hires steps must be >= 0");
-            return false;
-        }
-        if (hires_denoising_strength <= 0.f || hires_denoising_strength > 1.f) {
-            LOG_ERROR("error: hires denoising strength must be in (0.0, 1.0]");
-            return false;
-        }
-        if (!hires_custom_sigmas.empty() && hires_custom_sigmas.size() < 2) {
-            LOG_ERROR("error: hires custom sigmas must contain at least two values");
-            return false;
-        }
-        if (hires_upscale_tile_size < 1) {
-            LOG_ERROR("error: hires upscale tile size must be positive");
-            return false;
-        }
-    }
-
-    if (mode == UPSCALE || mode == ADETAILER) {
+    if (mode == UPSCALE) {
         if (init_image_path.length() == 0) {
-            LOG_ERROR("error: %s mode needs an init image (--init-img)\n",
-                      mode == UPSCALE ? "upscale" : "adetailer");
+            LOG_ERROR("error: upscale mode needs an init image (--init-img)");
             return false;
         }
     }
 
-    if (mode == ADETAILER && ad_model_path.empty()) {
-        LOG_ERROR("error: adetailer mode needs a detector model (--ad-model)\n");
-        return false;
+    if (mode == IMG_GEN || mode == VID_GEN) {
+        auto opt = mode == VID_GEN ? to_video_opt() : to_image_opt();
+        if (!opt) {
+            LOG_ERROR("%s", sd_get_last_error());
+            return false;
+        }
     }
-
     return true;
 }
 
@@ -2646,7 +2444,7 @@ bool SDGenerationParams::resolve_and_validate(SDMode mode,
                                               const std::string& lora_model_dir,
                                               const std::string& hires_upscalers_dir,
                                               bool strict) {
-    if (!resolve(lora_model_dir, hires_upscalers_dir, strict)) {
+    if (!resolve(lora_model_dir, hires_upscalers_dir, strict, mode == CONVERT)) {
         return false;
     }
     if (!validate(mode)) {
@@ -2655,10 +2453,71 @@ bool SDGenerationParams::resolve_and_validate(SDMode mode,
     return true;
 }
 
-sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
-    sd_img_gen_params_t params;
-    sd_img_gen_params_init(&params);
+static void set_sample_options(SDOptBuilder& opt, const std::string& prefix, const SDSampleParams& params, const std::optional<std::vector<int>>& layers, const std::optional<std::vector<float>>& sigmas, const std::string& extra_args) {
+    if (!extra_args.empty())
+        opt.set_string((prefix + "args").c_str(), extra_args);
+    opt.set_float((prefix + "eta").c_str(), params.eta);
+    opt.set_float((prefix + "guidance.distilled_guidance").c_str(), params.guidance.distilled_guidance);
+    opt.set_float((prefix + "guidance.img_cfg").c_str(), params.guidance.img_cfg);
+    opt.set_float((prefix + "guidance.slg.layer_end").c_str(), params.guidance.slg.layer_end);
+    opt.set_float((prefix + "guidance.slg.layer_start").c_str(), params.guidance.slg.layer_start);
+    if (layers)
+        opt.set_ints((prefix + "guidance.slg.layers").c_str(), layers->data(), layers->size());
+    opt.set_float((prefix + "guidance.slg.scale").c_str(), params.guidance.slg.scale);
+    opt.set_float((prefix + "guidance.txt_cfg").c_str(), params.guidance.txt_cfg);
+    opt.set_string((prefix + "method").c_str(), params.sample_method);
+    if (prefix == "sample.") {
+        opt.set_string("sample.scheduler", params.scheduler);
+        opt.set_float("sample.flow_shift", params.flow_shift);
+        opt.set_int("sample.shifted_timestep", params.shifted_timestep);
+        if (sigmas)
+            opt.set_floats((prefix + "sigmas").c_str(), sigmas->data(), sigmas->size());
+    }
+    opt.set_int((prefix + "steps").c_str(), params.sample_steps);
+}
 
+static void set_cache_options(SDOptBuilder& opt, const SDCacheParams& params) {
+    const SDCacheParams defaults;
+    if (params.Bn_compute_blocks != defaults.Bn_compute_blocks)
+        opt.set_int("cache.bn_compute_blocks", params.Bn_compute_blocks);
+    opt.set_float("cache.end_percent", params.end_percent);
+    opt.set_float("cache.error_decay_rate", params.error_decay_rate);
+    if (params.Fn_compute_blocks != defaults.Fn_compute_blocks)
+        opt.set_int("cache.fn_compute_blocks", params.Fn_compute_blocks);
+    opt.set_int("cache.max_cached_steps", params.max_cached_steps);
+    opt.set_int("cache.max_continuous_cached_steps", params.max_continuous_cached_steps);
+    opt.set_int("cache.max_warmup_steps", params.max_warmup_steps);
+    opt.set_string("cache.mode", params.mode);
+    opt.set_bool("cache.reset_error_on_compute", params.reset_error_on_compute);
+    opt.set_float("cache.residual_diff_threshold", params.residual_diff_threshold);
+    opt.set_float("cache.reuse_threshold", params.reuse_threshold);
+    opt.set_string("cache.scm_mask", params.scm_mask);
+    opt.set_bool("cache.scm_policy_dynamic", params.scm_policy_dynamic);
+    opt.set_float("cache.spectrum_flex_window", params.spectrum_flex_window);
+    opt.set_float("cache.spectrum_lam", params.spectrum_lam);
+    opt.set_int("cache.spectrum_m", params.spectrum_m);
+    opt.set_float("cache.spectrum_stop_percent", params.spectrum_stop_percent);
+    opt.set_float("cache.spectrum_w", params.spectrum_w);
+    opt.set_int("cache.spectrum_warmup_steps", params.spectrum_warmup_steps);
+    opt.set_int("cache.spectrum_window_size", params.spectrum_window_size);
+    opt.set_float("cache.start_percent", params.start_percent);
+    opt.set_int("cache.taylorseer_n_derivatives", params.taylorseer_n_derivatives);
+    opt.set_int("cache.taylorseer_skip_interval", params.taylorseer_skip_interval);
+    opt.set_bool("cache.use_relative_threshold", params.use_relative_threshold);
+}
+
+static void set_tiling_options(SDOptBuilder& opt, const SDTilingParams& params) {
+    opt.set_bool("vae_tiling.enabled", params.enabled);
+    opt.set_string("vae_tiling.extra_tiling_args", params.extra_tiling_args);
+    opt.set_float("vae_tiling.rel_size_h", params.rel_size_h);
+    opt.set_float("vae_tiling.rel_size_w", params.rel_size_w);
+    opt.set_float("vae_tiling.target_overlap", params.target_overlap);
+    opt.set_bool("vae_tiling.temporal_tiling", params.temporal_tiling);
+    opt.set_int("vae_tiling.tile_size_h", params.tile_size_h);
+    opt.set_int("vae_tiling.tile_size_w", params.tile_size_w);
+}
+
+SDOptPtr SDGenerationParams::to_image_opt() {
     lora_vec.clear();
     lora_vec.reserve(lora_map.size() + high_noise_lora_map.size());
     for (const auto& kv : lora_map) {
@@ -2674,90 +2533,55 @@ sd_img_gen_params_t SDGenerationParams::to_sd_img_gen_params_t() {
         ref_image_views.push_back(ref_image.get());
     }
 
-    pm_id_image_views.clear();
-    pm_id_image_views.reserve(pm_id_images.size());
-    for (auto& image : pm_id_images) {
-        pm_id_image_views.push_back(image.get());
-    }
+    vae_tiling_params.extra_tiling_args = extra_tiling_args.empty() ? nullptr : extra_tiling_args.c_str();
+    cache_params.scm_mask               = scm_mask.empty() ? nullptr : scm_mask.c_str();
 
-    sample_params.guidance.slg.layers                 = skip_layers.empty() ? nullptr : skip_layers.data();
-    sample_params.guidance.slg.layer_count            = skip_layers.size();
-    high_noise_sample_params.guidance.slg.layers      = high_noise_skip_layers.empty() ? nullptr : high_noise_skip_layers.data();
-    high_noise_sample_params.guidance.slg.layer_count = high_noise_skip_layers.size();
-    sample_params.custom_sigmas                       = custom_sigmas.empty() ? nullptr : custom_sigmas.data();
-    sample_params.custom_sigmas_count                 = static_cast<int>(custom_sigmas.size());
-    sample_params.extra_sample_args                   = extra_sample_args.empty() ? nullptr : extra_sample_args.c_str();
-    high_noise_sample_params.extra_sample_args        = high_noise_extra_sample_args.empty() ? nullptr : high_noise_extra_sample_args.c_str();
-    vae_tiling_params.extra_tiling_args               = extra_tiling_args.empty() ? nullptr : extra_tiling_args.c_str();
-    cache_params.scm_mask                             = scm_mask.empty() ? nullptr : scm_mask.c_str();
-
-    sd_pm_params_t pm_params = {
-        pm_id_image_views.empty() ? nullptr : pm_id_image_views.data(),
-        static_cast<int>(pm_id_image_views.size()),
-        pm_id_embed_path.empty() ? nullptr : pm_id_embed_path.c_str(),
-        pm_style_strength,
-    };
-
-    sd_pulid_params_t pulid_params = {
-        pulid_id_embedding_path.empty() ? nullptr : pulid_id_embedding_path.c_str(),
-        pulid_id_weight,
-    };
-
-    if (increase_ref_index) {
-        if (!ref_image_args.empty()) {
-            ref_image_args += ",";
-        }
-        ref_image_args += "ref_index_mode=increase";
-        LOG_WARN("Notice: --increase-ref-index is deprecated. Use --ref-image-args \"ref_index_mode=increase\" instead.");
-    }
-
-    params.loras               = lora_vec.empty() ? nullptr : lora_vec.data();
-    params.lora_count          = static_cast<uint32_t>(lora_vec.size());
-    params.prompt              = prompt.c_str();
-    params.negative_prompt     = negative_prompt.c_str();
-    params.clip_skip           = clip_skip;
-    params.init_image          = init_image.get();
-    params.ref_images          = ref_image_views.empty() ? nullptr : ref_image_views.data();
-    params.ref_images_count    = static_cast<int>(ref_image_views.size());
-    params.ref_image_args      = ref_image_args.c_str();
-    params.mask_image          = mask_image.get();
-    params.width               = get_resolved_width();
-    params.height              = get_resolved_height();
-    params.sample_params       = sample_params;
-    params.strength            = strength;
-    params.seed                = seed;
-    params.batch_count         = batch_count;
-    params.qwen_image_layers   = qwen_image_layers;
-    params.control_image       = control_image.get();
-    params.control_strength    = control_strength;
-    params.ip_adapter_image    = ip_adapter_image.get();
-    params.ip_adapter_strength = ip_adapter_strength;
-    params.pm_params           = pm_params;
-    params.pulid_params        = pulid_params;
-    params.vae_tiling_params   = vae_tiling_params;
-    params.cache               = cache_params;
-
-    params.hires.enabled             = hires_enabled;
-    params.hires.upscaler            = resolved_hires_upscaler;
-    params.hires.model_path          = hires_upscaler_model_path.empty() ? nullptr : hires_upscaler_model_path.c_str();
-    params.hires.scale               = hires_scale;
-    params.hires.target_width        = hires_width;
-    params.hires.target_height       = hires_height;
-    params.hires.steps               = hires_steps;
-    params.hires.denoising_strength  = hires_denoising_strength;
-    params.hires.upscale_tile_size   = hires_upscale_tile_size;
-    params.hires.custom_sigmas       = hires_custom_sigmas.empty() ? nullptr : hires_custom_sigmas.data();
-    params.hires.custom_sigmas_count = static_cast<int>(hires_custom_sigmas.size());
-    params.circular_x                = circular || circular_x;
-    params.circular_y                = circular || circular_y;
-    params.image_preprocess          = {image_preprocess.c_str()};
-    return params;
+    SDOptBuilder opt(sd_img_gen_opt_create());
+    opt.set_string("prompt", prompt);
+    opt.set_string("negative_prompt", negative_prompt);
+    opt.set_int("clip_skip", clip_skip);
+    opt.set_image("init_image", init_image.get());
+    opt.set_image("mask_image", mask_image.get());
+    opt.set_int("width", width);
+    opt.set_int("height", height);
+    opt.set_float("strength", strength);
+    opt.set_int("seed", seed);
+    opt.set_int("batch_count", batch_count);
+    opt.set_int("qwen_image_layers", qwen_image_layers);
+    opt.set_image("control_image", control_image.get());
+    opt.set_float("control_strength", control_strength);
+    opt.set_string("control_type", control_type);
+    opt.set_image("ip_adapter_image", ip_adapter_image.get());
+    opt.set_float("ip_adapter_strength", ip_adapter_strength);
+    if (hires_enabled.value_or(false))
+        opt.set_bool("hires.enabled", hires_enabled);
+    opt.set_string("hires.upscaler", resolved_hires_upscaler.empty() ? hires_upscaler : std::optional<std::string>(resolved_hires_upscaler));
+    if (!hires_upscaler_model_path.empty())
+        opt.set_string("hires.model_path", hires_upscaler_model_path);
+    opt.set_float("hires.scale", hires_scale);
+    opt.set_int("hires.target_width", hires_width);
+    opt.set_int("hires.target_height", hires_height);
+    opt.set_int("hires.steps", hires_steps);
+    opt.set_float("hires.denoising_strength", hires_denoising_strength);
+    opt.set_int("hires.upscale_tile_size", hires_upscale_tile_size);
+    if (circular)
+        opt.set_bool("circular_x", true);
+    else
+        opt.set_bool("circular_x", circular_x);
+    if (circular)
+        opt.set_bool("circular_y", true);
+    else
+        opt.set_bool("circular_y", circular_y);
+    opt.set_loras("loras", lora_vec.data(), lora_vec.size());
+    opt.set_images("ref_images", ref_image_views.data(), ref_image_views.size());
+    opt.set_floats("hires.sigmas", hires_custom_sigmas);
+    set_sample_options(opt, "sample.", sample_params, skip_layers, custom_sigmas, extra_sample_args);
+    set_cache_options(opt, cache_params);
+    set_tiling_options(opt, vae_tiling_params);
+    return opt.finish();
 }
 
-sd_vid_gen_params_t SDGenerationParams::to_sd_vid_gen_params_t() {
-    sd_vid_gen_params_t params;
-    sd_vid_gen_params_init(&params);
-
+SDOptPtr SDGenerationParams::to_video_opt() {
     lora_vec.clear();
     lora_vec.reserve(lora_map.size() + high_noise_lora_map.size());
     for (const auto& kv : lora_map) {
@@ -2789,7 +2613,7 @@ sd_vid_gen_params_t SDGenerationParams::to_sd_vid_gen_params_t() {
         for (auto& frame : ref_videos[i]) {
             frame_views.push_back(frame.get());
         }
-        sd_audio_t audio = i < ref_video_audios.size() ? ref_video_audios[i].get() : sd_audio_t{};
+        SDAudio audio = i < ref_video_audios.size() ? ref_video_audios[i].get() : SDAudio{};
         ref_video_views.push_back({frame_views.empty() ? nullptr : frame_views.data(),
                                    static_cast<int>(frame_views.size()),
                                    24,
@@ -2802,64 +2626,61 @@ sd_vid_gen_params_t SDGenerationParams::to_sd_vid_gen_params_t() {
         ref_audio_views.push_back(audio.get());
     }
 
-    sample_params.guidance.slg.layers                 = skip_layers.empty() ? nullptr : skip_layers.data();
-    sample_params.guidance.slg.layer_count            = skip_layers.size();
-    high_noise_sample_params.guidance.slg.layers      = high_noise_skip_layers.empty() ? nullptr : high_noise_skip_layers.data();
-    high_noise_sample_params.guidance.slg.layer_count = high_noise_skip_layers.size();
-    sample_params.custom_sigmas                       = custom_sigmas.empty() ? nullptr : custom_sigmas.data();
-    sample_params.custom_sigmas_count                 = static_cast<int>(custom_sigmas.size());
-    sample_params.extra_sample_args                   = extra_sample_args.empty() ? nullptr : extra_sample_args.c_str();
-    high_noise_sample_params.extra_sample_args        = high_noise_extra_sample_args.empty() ? nullptr : high_noise_extra_sample_args.c_str();
-    vae_tiling_params.extra_tiling_args               = extra_tiling_args.empty() ? nullptr : extra_tiling_args.c_str();
-    cache_params.scm_mask                             = scm_mask.empty() ? nullptr : scm_mask.c_str();
+    vae_tiling_params.extra_tiling_args = extra_tiling_args.empty() ? nullptr : extra_tiling_args.c_str();
+    cache_params.scm_mask               = scm_mask.empty() ? nullptr : scm_mask.c_str();
 
-    params.loras                     = lora_vec.empty() ? nullptr : lora_vec.data();
-    params.lora_count                = static_cast<uint32_t>(lora_vec.size());
-    params.prompt                    = prompt.c_str();
-    params.negative_prompt           = negative_prompt.c_str();
-    params.clip_skip                 = clip_skip;
-    params.init_image                = init_image.get();
-    params.end_image                 = end_image.get();
-    params.ref_images                = ref_image_views.empty() ? nullptr : ref_image_views.data();
-    params.ref_images_count          = static_cast<int>(ref_image_views.size());
-    params.ref_videos                = ref_video_views.empty() ? nullptr : ref_video_views.data();
-    params.ref_videos_count          = static_cast<int>(ref_video_views.size());
-    params.ref_audios                = ref_audio_views.empty() ? nullptr : ref_audio_views.data();
-    params.ref_audios_count          = static_cast<int>(ref_audio_views.size());
-    params.control_frames            = control_frame_views.empty() ? nullptr : control_frame_views.data();
-    params.control_frames_size       = static_cast<int>(control_frame_views.size());
-    params.width                     = get_resolved_width();
-    params.height                    = get_resolved_height();
-    params.sample_params             = sample_params;
-    params.high_noise_sample_params  = high_noise_sample_params;
-    params.moe_boundary              = moe_boundary;
-    params.strength                  = strength;
-    params.seed                      = seed;
-    params.video_frames              = video_frames;
-    params.fps                       = fps;
-    params.vace_strength             = vace_strength;
-    params.vae_tiling_params         = vae_tiling_params;
-    params.cache                     = cache_params;
-    params.hires.enabled             = hires_enabled;
-    params.hires.upscaler            = resolved_hires_upscaler;
-    params.hires.model_path          = hires_upscaler_model_path.empty() ? nullptr : hires_upscaler_model_path.c_str();
-    params.hires.scale               = hires_scale;
-    params.hires.target_width        = hires_width;
-    params.hires.target_height       = hires_height;
-    params.hires.steps               = hires_steps;
-    params.hires.denoising_strength  = hires_denoising_strength;
-    params.hires.upscale_tile_size   = hires_upscale_tile_size;
-    params.hires.custom_sigmas       = hires_custom_sigmas.empty() ? nullptr : hires_custom_sigmas.data();
-    params.hires.custom_sigmas_count = static_cast<int>(hires_custom_sigmas.size());
-    params.circular_x                = circular || circular_x;
-    params.circular_y                = circular || circular_y;
-    params.image_preprocess          = {image_preprocess.c_str()};
-    return params;
+    SDOptBuilder opt(sd_vid_gen_opt_create());
+    opt.set_string("prompt", prompt);
+    opt.set_string("negative_prompt", negative_prompt);
+    opt.set_int("clip_skip", clip_skip);
+    opt.set_image("init_image", init_image.get());
+    opt.set_image("end_image", end_image.get());
+    opt.set_int("width", width);
+    opt.set_int("height", height);
+    opt.set_float("moe_boundary", moe_boundary);
+    opt.set_float("strength", strength);
+    opt.set_int("seed", seed);
+    opt.set_int("video_frames", video_frames);
+    opt.set_int("fps", fps);
+    opt.set_float("vace_strength", vace_strength);
+    if (hires_enabled.value_or(false))
+        opt.set_bool("hires.enabled", hires_enabled);
+    opt.set_string("hires.upscaler", resolved_hires_upscaler.empty() ? hires_upscaler : std::optional<std::string>(resolved_hires_upscaler));
+    if (!hires_upscaler_model_path.empty())
+        opt.set_string("hires.model_path", hires_upscaler_model_path);
+    opt.set_float("hires.scale", hires_scale);
+    opt.set_int("hires.target_width", hires_width);
+    opt.set_int("hires.target_height", hires_height);
+    opt.set_int("hires.steps", hires_steps);
+    opt.set_float("hires.denoising_strength", hires_denoising_strength);
+    opt.set_int("hires.upscale_tile_size", hires_upscale_tile_size);
+    if (circular)
+        opt.set_bool("circular_x", true);
+    else
+        opt.set_bool("circular_x", circular_x);
+    if (circular)
+        opt.set_bool("circular_y", true);
+    else
+        opt.set_bool("circular_y", circular_y);
+    opt.set_loras("loras", lora_vec.data(), lora_vec.size());
+    opt.set_images("ref_images", ref_image_views.data(), ref_image_views.size());
+    opt.set_videos("ref_videos", ref_video_views.data(), ref_video_views.size());
+    opt.set_audios("ref_audios", ref_audio_views.data(), ref_audio_views.size());
+    opt.set_frames("control_frames", control_frame_views.data(), control_frame_views.size());
+    opt.set_floats("hires.sigmas", hires_custom_sigmas);
+    opt.set_string("sample.scheduler", high_noise_sample_params.scheduler);
+    opt.set_float("sample.flow_shift", high_noise_sample_params.flow_shift);
+    opt.set_int("sample.shifted_timestep", high_noise_sample_params.shifted_timestep);
+    set_sample_options(opt, "sample.", sample_params, skip_layers, custom_sigmas, extra_sample_args);
+    set_sample_options(opt, "high_noise_sample.", high_noise_sample_params, high_noise_skip_layers, {}, high_noise_extra_sample_args);
+    set_cache_options(opt, cache_params);
+    set_tiling_options(opt, vae_tiling_params);
+    return opt.finish();
 }
 
 std::string SDGenerationParams::to_string() const {
-    FreeUniquePtr<char> sample_params_str(sd_sample_params_to_str(&sample_params));
-    FreeUniquePtr<char> high_noise_sample_params_str(sd_sample_params_to_str(&high_noise_sample_params));
+    const std::string sample_params_str            = sample_params.sample_method.value_or("unset") + ", " + sample_params.scheduler.value_or("unset") + ", steps=" + (sample_params.sample_steps ? std::to_string(*sample_params.sample_steps) : "unset");
+    const std::string high_noise_sample_params_str = high_noise_sample_params.sample_method.value_or("unset") + ", " + high_noise_sample_params.scheduler.value_or("unset") + ", steps=" + (high_noise_sample_params.sample_steps ? std::to_string(*high_noise_sample_params.sample_steps) : "unset");
 
     std::ostringstream lora_ss;
     lora_ss << "{\n";
@@ -2910,21 +2731,15 @@ std::string SDGenerationParams::to_string() const {
         << "  ref_video_audio_paths: " << vec_str_to_string(ref_video_audio_paths) << ",\n"
         << "  ref_audio_paths: " << vec_str_to_string(ref_audio_paths) << ",\n"
         << "  control_video_path: \"" << control_video_path << "\",\n"
-        << "  image_preprocess: " << image_preprocess << ",\n"
-        << "  ref_image_args: " << ref_image_args << ",\n"
-        << "  increase_ref_index: " << (increase_ref_index ? "true" : "false") << ",\n"
-        << "  pm_id_images_dir: \"" << pm_id_images_dir << "\",\n"
-        << "  pm_id_embed_path: \"" << pm_id_embed_path << "\",\n"
-        << "  pm_style_strength: " << pm_style_strength << ",\n"
-        << "  skip_layers: " << vec_to_string(skip_layers) << ",\n"
-        << "  sample_params: " << SAFE_STR(sample_params_str.get()) << ",\n"
-        << "  high_noise_skip_layers: " << vec_to_string(high_noise_skip_layers) << ",\n"
-        << "  high_noise_sample_params: " << SAFE_STR(high_noise_sample_params_str.get()) << ",\n"
-        << "  custom_sigmas: " << vec_to_string(custom_sigmas) << ",\n"
+        << "  skip_layers: " << (skip_layers ? vec_to_string(*skip_layers) : "unset") << ",\n"
+        << "  sample_params: " << SAFE_STR(sample_params_str.c_str()) << ",\n"
+        << "  high_noise_skip_layers: " << (high_noise_skip_layers ? vec_to_string(*high_noise_skip_layers) : "unset") << ",\n"
+        << "  high_noise_sample_params: " << SAFE_STR(high_noise_sample_params_str.c_str()) << ",\n"
+        << "  custom_sigmas: " << (custom_sigmas ? vec_to_string(*custom_sigmas) : "unset") << ",\n"
         << "  cache_mode: \"" << cache_mode << "\",\n"
         << "  cache_option: \"" << cache_option << "\",\n"
         << "  cache: "
-        << (cache_params.mode != SD_CACHE_DISABLED ? "enabled" : "disabled")
+        << cache_params.mode
         << " (threshold=" << cache_params.reuse_threshold
         << ", start=" << cache_params.start_percent
         << ", end=" << cache_params.end_percent << "),\n"
@@ -2934,11 +2749,11 @@ std::string SDGenerationParams::to_string() const {
         << "  vace_strength: " << vace_strength << ",\n"
         << "  strength: " << strength << ",\n"
         << "  control_strength: " << control_strength << ",\n"
+        << "  control_type: \"" << control_type << "\",\n"
         << "  seed: " << seed << ",\n"
-        << "  upscale_factor: " << upscale_factor << ",\n"
         << "  upscale_repeats: " << upscale_repeats << ",\n"
         << "  upscale_tile_size: " << upscale_tile_size << ",\n"
-        << "  hires: { enabled: " << (hires_enabled ? "true" : "false")
+        << "  hires: { enabled: " << hires_enabled
         << ", upscaler: \"" << hires_upscaler << "\""
         << ", model_path: \"" << hires_upscaler_model_path << "\""
         << ", scale: " << hires_scale
@@ -2946,7 +2761,7 @@ std::string SDGenerationParams::to_string() const {
         << ", target_height: " << hires_height
         << ", steps: " << hires_steps
         << ", denoising_strength: " << hires_denoising_strength
-        << ", custom_sigmas: " << vec_to_string(hires_custom_sigmas)
+        << ", custom_sigmas: " << (hires_custom_sigmas ? vec_to_string(*hires_custom_sigmas) : "unset")
         << ", upscale_tile_size: " << hires_upscale_tile_size << " },\n"
         << "  vae_tiling_params: { "
         << vae_tiling_params.enabled << ", "
@@ -2963,302 +2778,4 @@ std::string SDGenerationParams::to_string() const {
 
 std::string version_string() {
     return std::string("stable-diffusion.cpp version ") + sd_version() + ", commit " + sd_commit();
-}
-
-static std::string safe_json_string(const char* value) {
-    return value ? value : "";
-}
-
-static void set_json_basename_if_not_empty(json& target, const char* key, const std::string& path) {
-    if (!path.empty()) {
-        target[key] = sd_basename(path);
-    }
-}
-
-static json build_sampling_metadata_json(const sd_sample_params_t& sample_params,
-                                         const std::vector<int>& skip_layers,
-                                         const std::vector<float>* custom_sigmas = nullptr) {
-    json sampling = {
-        {"steps", sample_params.sample_steps},
-        {"eta", sample_params.eta},
-        {"shifted_timestep", sample_params.shifted_timestep},
-        {"flow_shift", sample_params.flow_shift},
-        {"extra_sample_args", safe_json_string(sample_params.extra_sample_args)},
-        {"guidance",
-         {
-             {"txt_cfg", sample_params.guidance.txt_cfg},
-             {"img_cfg", sample_params.guidance.img_cfg},
-             {"distilled_guidance", sample_params.guidance.distilled_guidance},
-             {"slg",
-              {
-                  {"scale", sample_params.guidance.slg.scale},
-                  {"layers", skip_layers},
-                  {"start", sample_params.guidance.slg.layer_start},
-                  {"end", sample_params.guidance.slg.layer_end},
-              }},
-         }},
-    };
-    if (sample_params.sample_method != SAMPLE_METHOD_COUNT) {
-        sampling["method"] = safe_json_string(sd_sample_method_name(sample_params.sample_method));
-    }
-    if (sample_params.scheduler != SCHEDULER_COUNT) {
-        sampling["scheduler"] = safe_json_string(sd_scheduler_name(sample_params.scheduler));
-    }
-    if (custom_sigmas != nullptr) {
-        sampling["custom_sigmas"] = *custom_sigmas;
-    }
-    return sampling;
-}
-
-std::string build_sdcpp_image_metadata_json(const SDContextParams& ctx_params,
-                                            const SDGenerationParams& gen_params,
-                                            int64_t seed,
-                                            SDMode mode) {
-    json root;
-    root["schema"] = "sdcpp.image.params/v1";
-    root["mode"]   = "img_gen";
-    if (mode == VID_GEN) {
-        root["mode"] = "vid_gen";
-    } else if (mode == ADETAILER) {
-        root["mode"] = "adetailer";
-    }
-    root["generator"] = {
-        {"name", "stable-diffusion.cpp"},
-        {"version", safe_json_string(sd_version())},
-        {"commit", safe_json_string(sd_commit())},
-    };
-    root["seed"]   = seed;
-    root["width"]  = gen_params.get_resolved_width();
-    root["height"] = gen_params.get_resolved_height();
-
-    root["prompt"] = {
-        {"positive", gen_params.prompt},
-        {"negative", gen_params.negative_prompt},
-    };
-    if (!gen_params.ad_model_path.empty()) {
-        root["adetailer"] = {
-            {"model", sd_basename(gen_params.ad_model_path)},
-            {"prompt", gen_params.ad_prompt},
-            {"negative_prompt", gen_params.ad_negative_prompt},
-            {"extra_args", gen_params.extra_ad_args},
-        };
-    }
-    root["sampling"] = build_sampling_metadata_json(gen_params.sample_params,
-                                                    gen_params.skip_layers,
-                                                    &gen_params.custom_sigmas);
-
-    json models;
-    set_json_basename_if_not_empty(models, "model", ctx_params.model_path);
-    set_json_basename_if_not_empty(models, "clip_l", ctx_params.clip_l_path);
-    set_json_basename_if_not_empty(models, "clip_g", ctx_params.clip_g_path);
-    set_json_basename_if_not_empty(models, "clip_vision", ctx_params.clip_vision_path);
-    set_json_basename_if_not_empty(models, "t5xxl", ctx_params.t5xxl_path);
-    set_json_basename_if_not_empty(models, "llm", ctx_params.llm_path);
-    set_json_basename_if_not_empty(models, "llm_vision", ctx_params.llm_vision_path);
-    set_json_basename_if_not_empty(models, "diffusion_model", ctx_params.diffusion_model_path);
-    set_json_basename_if_not_empty(models, "high_noise_diffusion_model", ctx_params.high_noise_diffusion_model_path);
-    set_json_basename_if_not_empty(models, "uncond_diffusion_model", ctx_params.uncond_diffusion_model_path);
-    set_json_basename_if_not_empty(models, "vae", ctx_params.vae_path);
-    set_json_basename_if_not_empty(models, "taesd", ctx_params.taesd_path);
-    set_json_basename_if_not_empty(models, "control_net", ctx_params.control_net_path);
-    root["models"] = std::move(models);
-
-    root["clip_skip"]           = gen_params.clip_skip;
-    root["strength"]            = gen_params.strength;
-    root["control_strength"]    = gen_params.control_strength;
-    root["ip_adapter_strength"] = gen_params.ip_adapter_strength;
-    root["ref_image_args"]      = gen_params.ref_image_args;
-    root["image_preprocess"]    = gen_params.image_preprocess;
-    root["increase_ref_index"]  = gen_params.increase_ref_index;
-    if (mode == VID_GEN) {
-        root["video"] = {
-            {"frame_count", gen_params.video_frames},
-            {"fps", gen_params.fps},
-        };
-        root["moe_boundary"]        = gen_params.moe_boundary;
-        root["vace_strength"]       = gen_params.vace_strength;
-        root["high_noise_sampling"] = build_sampling_metadata_json(gen_params.high_noise_sample_params,
-                                                                   gen_params.high_noise_skip_layers);
-    }
-
-    root["rng"] = safe_json_string(sd_rng_type_name(ctx_params.rng_type));
-    if (ctx_params.sampler_rng_type != RNG_TYPE_COUNT) {
-        root["sampler_rng"] = safe_json_string(sd_rng_type_name(ctx_params.sampler_rng_type));
-    }
-
-    json loras = json::array();
-    for (const auto& entry : gen_params.lora_map) {
-        loras.push_back({
-            {"name", sd_basename(entry.first)},
-            {"multiplier", entry.second},
-            {"is_high_noise", false},
-        });
-    }
-    for (const auto& entry : gen_params.high_noise_lora_map) {
-        loras.push_back({
-            {"name", sd_basename(entry.first)},
-            {"multiplier", entry.second},
-            {"is_high_noise", true},
-        });
-    }
-    if (!loras.empty()) {
-        root["loras"] = std::move(loras);
-    }
-
-    if (gen_params.hires_enabled) {
-        root["hires"] = {
-            {"enabled", gen_params.hires_enabled},
-            {"upscaler", gen_params.hires_upscaler},
-            {"model", gen_params.hires_upscaler_model_path.empty() ? "" : sd_basename(gen_params.hires_upscaler_model_path)},
-            {"scale", gen_params.hires_scale},
-            {"target_width", gen_params.hires_width},
-            {"target_height", gen_params.hires_height},
-            {"steps", gen_params.hires_steps},
-            {"denoising_strength", gen_params.hires_denoising_strength},
-            {"custom_sigmas", gen_params.hires_custom_sigmas},
-            {"upscale_tile_size", gen_params.hires_upscale_tile_size},
-        };
-    }
-
-    if (gen_params.cache_params.mode != SD_CACHE_DISABLED) {
-        root["cache"] = {
-            {"requested_mode", gen_params.cache_mode},
-            {"requested_option", gen_params.cache_option},
-            {"mode", gen_params.cache_params.mode},
-            {"scm_mask", gen_params.scm_mask},
-            {"scm_policy_dynamic", gen_params.scm_policy_dynamic},
-            {"reuse_threshold", gen_params.cache_params.reuse_threshold},
-            {"start_percent", gen_params.cache_params.start_percent},
-            {"end_percent", gen_params.cache_params.end_percent},
-            {"error_decay_rate", gen_params.cache_params.error_decay_rate},
-            {"use_relative_threshold", gen_params.cache_params.use_relative_threshold},
-            {"reset_error_on_compute", gen_params.cache_params.reset_error_on_compute},
-            {"Fn_compute_blocks", gen_params.cache_params.Fn_compute_blocks},
-            {"Bn_compute_blocks", gen_params.cache_params.Bn_compute_blocks},
-            {"residual_diff_threshold", gen_params.cache_params.residual_diff_threshold},
-            {"max_warmup_steps", gen_params.cache_params.max_warmup_steps},
-            {"max_cached_steps", gen_params.cache_params.max_cached_steps},
-            {"max_continuous_cached_steps", gen_params.cache_params.max_continuous_cached_steps},
-            {"taylorseer_n_derivatives", gen_params.cache_params.taylorseer_n_derivatives},
-            {"taylorseer_skip_interval", gen_params.cache_params.taylorseer_skip_interval},
-            {"spectrum_w", gen_params.cache_params.spectrum_w},
-            {"spectrum_m", gen_params.cache_params.spectrum_m},
-            {"spectrum_lam", gen_params.cache_params.spectrum_lam},
-            {"spectrum_window_size", gen_params.cache_params.spectrum_window_size},
-            {"spectrum_flex_window", gen_params.cache_params.spectrum_flex_window},
-            {"spectrum_warmup_steps", gen_params.cache_params.spectrum_warmup_steps},
-            {"spectrum_stop_percent", gen_params.cache_params.spectrum_stop_percent},
-        };
-    }
-
-    if (gen_params.vae_tiling_params.enabled ||
-        gen_params.vae_tiling_params.temporal_tiling ||
-        !gen_params.extra_tiling_args.empty()) {
-        root["vae_tiling"] = {
-            {"enabled", gen_params.vae_tiling_params.enabled},
-            {"temporal_tiling", gen_params.vae_tiling_params.temporal_tiling},
-            {"tile_size_w", gen_params.vae_tiling_params.tile_size_w},
-            {"tile_size_h", gen_params.vae_tiling_params.tile_size_h},
-            {"target_overlap", gen_params.vae_tiling_params.target_overlap},
-            {"rel_size_w", gen_params.vae_tiling_params.rel_size_w},
-            {"rel_size_h", gen_params.vae_tiling_params.rel_size_h},
-            {"extra_tiling_args", gen_params.extra_tiling_args},
-        };
-    }
-
-    return root.dump();
-}
-
-std::string get_image_params(const SDContextParams& ctx_params,
-                             const SDGenerationParams& gen_params,
-                             int64_t seed,
-                             SDMode mode) {
-    std::string parameter_string;
-    if (gen_params.prompt_with_lora.size() != 0) {
-        parameter_string += gen_params.prompt_with_lora + "\n";
-    } else {
-        parameter_string += gen_params.prompt + "\n";
-    }
-    if (gen_params.negative_prompt.size() != 0) {
-        parameter_string += "Negative prompt: " + gen_params.negative_prompt + "\n";
-    }
-    parameter_string += "Steps: " + std::to_string(gen_params.sample_params.sample_steps) + ", ";
-    parameter_string += "CFG scale: " + std::to_string(gen_params.sample_params.guidance.txt_cfg) + ", ";
-    if (gen_params.sample_params.guidance.slg.scale != 0 && gen_params.skip_layers.size() != 0) {
-        parameter_string += "SLG scale: " + std::to_string(gen_params.sample_params.guidance.slg.scale) + ", ";
-        parameter_string += "Skip layers: [";
-        for (const auto& layer : gen_params.skip_layers) {
-            parameter_string += std::to_string(layer) + ", ";
-        }
-        parameter_string += "], ";
-        parameter_string += "Skip layer start: " + std::to_string(gen_params.sample_params.guidance.slg.layer_start) + ", ";
-        parameter_string += "Skip layer end: " + std::to_string(gen_params.sample_params.guidance.slg.layer_end) + ", ";
-    }
-    parameter_string += "Guidance: " + std::to_string(gen_params.sample_params.guidance.distilled_guidance) + ", ";
-    parameter_string += "Eta: " + std::to_string(gen_params.sample_params.eta) + ", ";
-    if (!gen_params.extra_sample_args.empty()) {
-        parameter_string += "Extra sample args: " + gen_params.extra_sample_args + ", ";
-    }
-    if (!gen_params.ad_model_path.empty()) {
-        parameter_string += "ADetailer model: " + sd_basename(gen_params.ad_model_path) + ", ";
-        if (!gen_params.ad_prompt.empty()) {
-            parameter_string += "ADetailer prompt: " + gen_params.ad_prompt + ", ";
-        }
-        if (!gen_params.ad_negative_prompt.empty()) {
-            parameter_string += "ADetailer negative prompt: " + gen_params.ad_negative_prompt + ", ";
-        }
-        if (!gen_params.extra_ad_args.empty()) {
-            parameter_string += "ADetailer args: " + gen_params.extra_ad_args + ", ";
-        }
-    }
-    parameter_string += "Seed: " + std::to_string(seed) + ", ";
-    parameter_string += "Size: " + std::to_string(gen_params.get_resolved_width()) + "x" + std::to_string(gen_params.get_resolved_height()) + ", ";
-    parameter_string += "Model: " + sd_basename(ctx_params.model_path) + ", ";
-    parameter_string += "RNG: " + std::string(sd_rng_type_name(ctx_params.rng_type)) + ", ";
-    if (ctx_params.sampler_rng_type != RNG_TYPE_COUNT) {
-        parameter_string += "Sampler RNG: " + std::string(sd_rng_type_name(ctx_params.sampler_rng_type)) + ", ";
-    }
-    parameter_string += "Sampler: " + std::string(sd_sample_method_name(gen_params.sample_params.sample_method));
-    if (!gen_params.custom_sigmas.empty()) {
-        parameter_string += ", Custom Sigmas: [";
-        for (size_t i = 0; i < gen_params.custom_sigmas.size(); ++i) {
-            std::ostringstream oss;
-            oss << std::fixed << std::setprecision(4) << gen_params.custom_sigmas[i];
-            parameter_string += oss.str() + (i == gen_params.custom_sigmas.size() - 1 ? "" : ", ");
-        }
-        parameter_string += "]";
-    } else if (gen_params.sample_params.scheduler != SCHEDULER_COUNT) {  // Only show schedule if not using custom sigmas
-        parameter_string += " " + std::string(sd_scheduler_name(gen_params.sample_params.scheduler));
-    }
-    parameter_string += ", ";
-    for (const auto& te : {ctx_params.clip_l_path, ctx_params.clip_g_path, ctx_params.t5xxl_path, ctx_params.llm_path, ctx_params.llm_vision_path}) {
-        if (!te.empty()) {
-            parameter_string += "TE: " + sd_basename(te) + ", ";
-        }
-    }
-    if (!ctx_params.diffusion_model_path.empty()) {
-        parameter_string += "Unet: " + sd_basename(ctx_params.diffusion_model_path) + ", ";
-    }
-    if (!ctx_params.uncond_diffusion_model_path.empty()) {
-        parameter_string += "Uncond Unet: " + sd_basename(ctx_params.uncond_diffusion_model_path) + ", ";
-    }
-    if (!ctx_params.vae_path.empty()) {
-        parameter_string += "VAE: " + sd_basename(ctx_params.vae_path) + ", ";
-    }
-    if (gen_params.clip_skip != -1) {
-        parameter_string += "Clip skip: " + std::to_string(gen_params.clip_skip) + ", ";
-    }
-    if (gen_params.hires_enabled) {
-        parameter_string += "Hires upscale: " + gen_params.hires_upscaler + ", ";
-        parameter_string += "Hires scale: " + std::to_string(gen_params.hires_scale) + ", ";
-        parameter_string += "Hires resize: " + std::to_string(gen_params.hires_width) + "x" + std::to_string(gen_params.hires_height) + ", ";
-        parameter_string += "Hires steps: " + std::to_string(gen_params.hires_steps) + ", ";
-        parameter_string += "Denoising strength: " + std::to_string(gen_params.hires_denoising_strength) + ", ";
-        if (!gen_params.hires_custom_sigmas.empty()) {
-            parameter_string += "Hires custom sigmas: " + vec_to_string(gen_params.hires_custom_sigmas) + ", ";
-        }
-    }
-    parameter_string += "Version: stable-diffusion.cpp";
-    parameter_string += ", SDCPP: " + build_sdcpp_image_metadata_json(ctx_params, gen_params, seed, mode);
-    return parameter_string;
 }

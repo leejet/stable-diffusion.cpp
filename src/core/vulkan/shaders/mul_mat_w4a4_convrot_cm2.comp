@@ -1,0 +1,88 @@
+#version 460
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_NV_cooperative_matrix2 : require
+#extension GL_KHR_memory_scope_semantics : require
+layout(local_size_x = 256) in;
+layout(constant_id = 0) const uint BM = 64;
+layout(constant_id = 1) const uint BN = 64;
+layout(constant_id = 2) const uint BK = 64;
+const uint STRIDE                     = BK / 4 + 4;
+layout(push_constant) uniform parameter {
+    uint n;
+    uint rows;
+    uint k;
+    uint has_bias;
+}
+p;
+layout(binding = 0, std430) readonly buffer W {
+    uint data_w[];
+};
+layout(binding = 1, std430) readonly buffer A {
+    uvec4 data_a[];
+};
+layout(binding = 2, std430) readonly buffer WS {
+    float data_ws[];
+};
+layout(binding = 3, std430) readonly buffer AS {
+    float data_as[];
+};
+layout(binding = 4, std430) readonly buffer B {
+    float data_b[];
+};
+layout(binding = 5, std430) writeonly buffer D {
+    int32_t data_d[];
+};
+shared uint weights[2 * BM * STRIDE];
+shared uint activations[2 * BN * STRIDE];
+void load_tile(uint base, uint buf, uint row_base, uint col_base) {
+    const uint tid = gl_LocalInvocationIndex;
+    for (uint i = tid; i < BN * BK / 16; i += 256) {
+        const uint r = i / (BK / 16), t = i % (BK / 16);
+        const uvec4 value       = row_base + r < p.rows ? data_a[(row_base + r) * (p.k / 16) + base / 16 + t] : uvec4(0);
+        const uint offset       = (buf * BN + r) * STRIDE + t * 4;
+        activations[offset]     = value.x;
+        activations[offset + 1] = value.y;
+        activations[offset + 2] = value.z;
+        activations[offset + 3] = value.w;
+    }
+    for (uint i = tid; i < BM * BK / 8; i += 256) {
+        const uint c = i / (BK / 8), t = i % (BK / 8);
+        const uint v                                 = col_base + c < p.n ? data_w[(col_base + c) * (p.k / 8) + base / 8 + t] : 0u;
+        const uint lo                                = (v & 15u) | ((v << 4) & 0xf00u) | ((v << 8) & 0xf0000u) | ((v << 12) & 0xf000000u);
+        const uint hi                                = ((v >> 16) & 15u) | ((v >> 12) & 0xf00u) | ((v >> 8) & 0xf0000u) | ((v >> 4) & 0xf000000u);
+        weights[(buf * BM + c) * STRIDE + 2 * t]     = (lo & 0x07070707u) | ((lo & 0x08080808u) * 31u);
+        weights[(buf * BM + c) * STRIDE + 2 * t + 1] = (hi & 0x07070707u) | ((hi & 0x08080808u) * 31u);
+    }
+}
+int32_t dequantize(const in uint r, const in uint c, const in int32_t v, const in uint row, const in uint col) {
+    if (row + c >= p.rows || col + r >= p.n)
+        return 0;
+    precise float value = float(v) * data_as[row + c] * data_ws[col + r];
+    if (p.has_bias != 0)
+        value += data_b[col + r];
+    return floatBitsToInt(value);
+}
+void main() {
+    const uint row = gl_WorkGroupID.y * BN, col = gl_WorkGroupID.x * BM;
+    coopmat<int32_t, gl_ScopeWorkgroup, BM, BN, gl_MatrixUseAccumulator> sum = coopmat<int32_t, gl_ScopeWorkgroup, BM, BN, gl_MatrixUseAccumulator>(0);
+    load_tile(0, 0, row, col);
+    barrier();
+    for (uint base = 0; base < p.k; base += BK) {
+        const uint buf = (base / BK) & 1u;
+        if (base + BK < p.k)
+            load_tile(base + BK, buf ^ 1u, row, col);
+        coopmat<int8_t, gl_ScopeWorkgroup, BM, BK, gl_MatrixUseA> w;
+        coopmat<int8_t, gl_ScopeWorkgroup, BK, BN, gl_MatrixUseB> a;
+        coopMatLoad(w, weights, buf * BM * STRIDE, STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+        coopMatLoad(a, activations, buf * BN * STRIDE, STRIDE, gl_CooperativeMatrixLayoutColumnMajor);
+        sum = coopMatMulAdd(w, a, sum);
+        barrier();
+    }
+    coopMatPerElementNV(sum, sum, dequantize, row, col);
+    tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> dl = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
+    dl                                                            = setTensorLayoutDimensionNV(dl, p.rows, p.n);
+    tensorViewNV<2, false, 1, 0> transpose                        = createTensorViewNV(2, false, 1, 0);
+    coopMatStoreTensorNV(sum, data_d, 0, sliceTensorLayoutNV(dl, row, BN, col, BM), transpose);
+}

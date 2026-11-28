@@ -56,15 +56,6 @@ namespace HiDreamO1 {
         }
     };
 
-    static inline std::string repeat_special_token(const std::string& token, int64_t count) {
-        std::string out;
-        out.reserve(static_cast<size_t>(count) * token.size());
-        for (int64_t i = 0; i < count; ++i) {
-            out += token;
-        }
-        return out;
-    }
-
     static inline std::pair<int, int> calculate_dimensions(int max_size, double ratio) {
         int width  = static_cast<int>(std::sqrt(max_size * max_size * ratio));
         int height = static_cast<int>(width / ratio);
@@ -206,7 +197,7 @@ namespace HiDreamO1 {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* t) {
             auto mlp_0 = std::dynamic_pointer_cast<Linear>(blocks["mlp.0"]);
             auto mlp_2 = std::dynamic_pointer_cast<Linear>(blocks["mlp.2"]);
-            auto emb   = ggml_ext_timestep_embedding(ctx->ggml_ctx, t, frequency_embedding_size, 10000, 1000.0f);
+            auto emb   = ggml_ext_timestep_embedding(ctx, t, frequency_embedding_size, 10000, 1000.0f);
             emb        = mlp_0->forward(ctx, emb);
             emb        = ggml_silu_inplace(ctx->ggml_ctx, emb);
             emb        = mlp_2->forward(ctx, emb);
@@ -247,10 +238,10 @@ namespace HiDreamO1 {
             blocks["language_model"] = std::make_shared<LLM::TextModel>(this->config.llm);
             blocks["t_embedder1"]    = std::make_shared<TimestepEmbedder>(this->config.llm.hidden_size);
             blocks["x_embedder"]     = std::make_shared<BottleneckPatchEmbed>(this->config.patch_size * this->config.patch_size * 3,
-                                                                          this->config.llm.hidden_size / 4,
-                                                                          this->config.llm.hidden_size);
+                                                                              this->config.llm.hidden_size / 4,
+                                                                              this->config.llm.hidden_size);
             blocks["final_layer2"]   = std::make_shared<FinalLayer>(this->config.llm.hidden_size,
-                                                                  this->config.patch_size * this->config.patch_size * 3);
+                                                                    this->config.patch_size * this->config.patch_size * 3);
         }
 
         std::shared_ptr<LLM::TextModel> text_model() {
@@ -301,7 +292,6 @@ namespace HiDreamO1 {
 
         ggml_tensor* encode_image(GGMLRunnerContext* runner_ctx, ggml_tensor* image) {
             return LLM::LLMRunner::encode_image_common(this,
-                                                       compute_ctx,
                                                        runner_ctx,
                                                        image,
                                                        config.llm.vision,
@@ -405,9 +395,9 @@ namespace HiDreamO1 {
             txt = LLM::splice_image_embeds(&runner_ctx, txt, image_embeds);
 
             auto t_emb          = t_embedder1->forward(&runner_ctx, timestep);
-            int64_t txt_seq_len = input_ids->ne[0];
+            int64_t txt_seq_len = txt->ne[1];
             if (txt_seq_len > 1) {
-                auto prefix = ggml_ext_slice(compute_ctx, txt, 1, 0, txt_seq_len - 1);
+                auto prefix = ggml_ext_slice(&runner_ctx, txt, 1, 0, txt_seq_len - 1);
                 txt         = ggml_concat(compute_ctx, prefix, ggml_reshape_3d(compute_ctx, t_emb, t_emb->ne[0], 1, 1), 1);
             } else {
                 txt = ggml_reshape_3d(compute_ctx, t_emb, t_emb->ne[0], 1, 1);
@@ -434,8 +424,8 @@ namespace HiDreamO1 {
                 }
                 x_pred_start = first_vinput;
             }
-            auto x_pred = ggml_ext_slice(compute_ctx, x_pred_all, 1, x_pred_start, x_pred_start + target_tokens);
-            x_pred      = DiT::unpatchify_and_crop(compute_ctx, x_pred, x->ne[1], x->ne[0], PATCH_SIZE, PATCH_SIZE);
+            auto x_pred = ggml_ext_slice(&runner_ctx, x_pred_all, 1, x_pred_start, x_pred_start + target_tokens);
+            x_pred      = DiT::unpatchify_and_crop(&runner_ctx, x_pred, x->ne[1], x->ne[0], PATCH_SIZE, PATCH_SIZE);
 
             float sigma = 1.0f - timestep_tensor.values()[0];
             sigma       = std::max(1e-6f, sigma);
@@ -484,6 +474,9 @@ namespace HiDreamO1 {
     };
 
     struct HiDreamO1Conditioner : public Conditioner {
+        bool supports_prompt_formatting() const override { return true; }
+        size_t max_reference_images() const override { return std::numeric_limits<size_t>::max(); }
+
         std::shared_ptr<Tokenizer> tokenizer;
         std::shared_ptr<HiDreamO1VisionRunner> vision_runner;
 
@@ -506,8 +499,8 @@ namespace HiDreamO1 {
             vision_runner->set_max_graph_vram_bytes(max_graph_vram_bytes);
         }
 
-        void set_flash_attention_enabled(bool enabled) override {
-            vision_runner->set_flash_attention_enabled(enabled);
+        void for_each_runner(const std::function<void(GGMLRunner&)>& visit) override {
+            visit(*vision_runner);
         }
 
         void set_scale_overrides(float linear_scale, float attn_scale) override {
@@ -539,11 +532,13 @@ namespace HiDreamO1 {
             std::vector<std::array<int32_t, 3>> image_grids;
             std::vector<int32_t> skip_vision_start;
 
-            std::string prompt = "<|im_start|>user\n";
+            std::string prompt = sd::prompt_templates::with_system("<|im_start|>user\n", conditioner_params.system_prompt);
 
             if (ref_images.empty()) {
                 prompt += conditioner_params.text;
                 prompt += "<|im_end|>\n<|im_start|>assistant\n<|boi_token|><|tms_token|>";
+                if (conditioner_params.raw)
+                    prompt = conditioner_params.text;
                 std::vector<int> input_ids;
                 if (!tokenizer->encode(prompt, input_ids, nullptr)) {
                     return {};
@@ -616,8 +611,7 @@ namespace HiDreamO1 {
                 sd::Tensor<float> vlm_image = sd::ops::interpolate(
                     resized_ref,
                     {dims.first, dims.second, resized_ref.shape()[2], resized_ref.shape()[3]});
-                vlm_image            = vlm_image * 2.0f - 1.0f;
-                int64_t image_tokens = static_cast<int64_t>(dims.first / PATCH_SIZE) * static_cast<int64_t>(dims.second / PATCH_SIZE);
+                vlm_image = vlm_image * 2.0f - 1.0f;
 
                 auto patch_img = resized_ref * 2.0f - 1.0f;
                 result.c_ref_images.push_back(std::move(patch_img));
@@ -626,8 +620,11 @@ namespace HiDreamO1 {
                     return {};
                 }
                 int64_t prompt_start = static_cast<int64_t>(prefix_tokens.size());
+                for (const auto& grid : image_grids) {
+                    prompt_start += static_cast<int64_t>(grid[1]) * grid[2] - 1;
+                }
                 prompt += "<|vision_start|>";
-                prompt += repeat_special_token("<|image_pad|>", image_tokens);
+                prompt += "<|image_pad|>";
                 prompt += "<|vision_end|>";
                 vlm_images.emplace_back(static_cast<int>(prompt_start), std::move(vlm_image));
                 image_grids.push_back({1, dims.second / PATCH_SIZE, dims.first / PATCH_SIZE});
@@ -636,12 +633,21 @@ namespace HiDreamO1 {
 
             prompt += conditioner_params.text;
             prompt += "<|im_end|>\n<|im_start|>assistant\n<|boi_token|><|tms_token|>";
+            if (conditioner_params.raw)
+                prompt = conditioner_params.text;
             std::vector<int> input_ids;
             if (!tokenizer->encode(prompt, input_ids, nullptr)) {
                 return {};
             }
 
             std::vector<int32_t> input_ids_pad = input_ids;
+            for (size_t i = 0; i < vlm_images.size(); ++i) {
+                const auto& grid    = image_grids[i];
+                const int64_t count = static_cast<int64_t>(grid[1]) * grid[2];
+                input_ids_pad.insert(input_ids_pad.begin() + vlm_images[i].first, count - 1, IMAGE_TOKEN_ID);
+            }
+
+            int txt_seq_len = static_cast<int>(input_ids_pad.size());
             input_ids_pad.push_back(VISION_START_TOKEN_ID);
             input_ids_pad.insert(input_ids_pad.end(), target_image_len - 1, IMAGE_TOKEN_ID);
             image_grids.push_back({1, static_cast<int32_t>(height / PATCH_SIZE), static_cast<int32_t>(width / PATCH_SIZE)});
@@ -656,8 +662,7 @@ namespace HiDreamO1 {
             }
 
             std::vector<int32_t> token_types(input_ids_pad.size(), 0);
-            int txt_seq_len = static_cast<int>(input_ids.size());
-            int bgn         = txt_seq_len - TIMESTEP_TOKEN_NUM;
+            int bgn = txt_seq_len - TIMESTEP_TOKEN_NUM;
             for (int i = bgn; i < static_cast<int>(token_types.size()); ++i) {
                 token_types[i] = 1;
             }

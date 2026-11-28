@@ -216,7 +216,7 @@ protected:
     }
 
     ggml_tensor* get_alpha(GGMLRunnerContext* ctx) {
-        auto mix_factor = ggml_ext_cast_f32(ctx->ggml_ctx, ctx->backend, params["mix_factor"]);
+        auto mix_factor = ggml_ext_cast_f32(ctx, params["mix_factor"]);
         return ggml_sigmoid(ctx->ggml_ctx, mix_factor);
     }
 
@@ -526,7 +526,7 @@ protected:
             int64_t conv_in_out_channels = conv_in_iter->second.ne[3];
             if (last_ch_mult > 0 && conv_in_out_channels % last_ch_mult == 0) {
                 decoder_ch = static_cast<int>(conv_in_out_channels / last_ch_mult);
-                LOG_INFO("vae decoder: ch = %d", decoder_ch);
+                LOG_VERBOSE("vae decoder: ch = %d", decoder_ch);
             } else {
                 LOG_WARN("vae decoder: failed to infer ch from %s (%" PRId64 " / %d)",
                          get_tensor_name(prefix, "decoder.conv_in.weight").c_str(),
@@ -601,11 +601,11 @@ public:
             int64_t H = h * p;
             int64_t W = w * p;
 
-            z = ggml_reshape_4d(ctx->ggml_ctx, z, w * h, p * p, C, N);                           // [N, C, p*p, h*w]
-            z = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, z, 1, 0, 2, 3));  // [N, C, h*w, p*p]
-            z = ggml_reshape_4d(ctx->ggml_ctx, z, p, p, w, h * C * N);                           // [N*C*h, w, p, p]
-            z = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, z, 0, 2, 1, 3));  // [N*C*h, p, w, p]
-            z = ggml_reshape_4d(ctx->ggml_ctx, z, W, H, C, N);                                   // [N, C, h*p, w*p]
+            z = ggml_reshape_4d(ctx->ggml_ctx, z, w * h, p * p, C, N);                 // [N, C, p*p, h*w]
+            z = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, z, 1, 0, 2, 3));  // [N, C, h*w, p*p]
+            z = ggml_reshape_4d(ctx->ggml_ctx, z, p, p, w, h * C * N);                 // [N*C*h, w, p, p]
+            z = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, z, 0, 2, 1, 3));  // [N*C*h, p, w, p]
+            z = ggml_reshape_4d(ctx->ggml_ctx, z, W, H, C, N);                         // [N, C, h*p, w*p]
         }
 
         if (use_quant) {
@@ -632,7 +632,7 @@ public:
             // sd::ggml_graph_cut::mark_graph_cut(z, "vae.encode.final", "z");
         }
         if (sd_version_uses_flux2_vae(version)) {
-            z = ggml_ext_chunk(ctx->ggml_ctx, z, 2, 2)[0];
+            z = ggml_ext_chunk(ctx, z, 2, 2)[0];
 
             // [N, C, H, W] -> [N, C*p*p, H/p, W/p]
             int64_t p = 2;
@@ -650,6 +650,12 @@ public:
             z = ggml_reshape_4d(ctx->ggml_ctx, z, w, h, p * p * C, N);                 // [N, C*p*p, h*w]
         }
         return z;
+    }
+
+    int get_latent_channels() const {
+        if (sd_version_uses_flux2_vae(version))
+            return dd_config.z_channels * 4;
+        return use_quant ? embed_dim : dd_config.z_channels;
     }
 
     int get_encoder_output_channels() {
@@ -760,10 +766,10 @@ struct AutoEncoderKL : public VAE {
         return latents;
     }
 
-    sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng) override {
+    sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng, VAEPosterior posterior, bool) override {
         if (sd_version_uses_flux2_vae(version)) {
             return vae_output;
-        } else if (version == VERSION_SD1_PIX2PIX) {
+        } else if (posterior == VAEPosterior::Mode || (posterior == VAEPosterior::ModelDefault && version == VERSION_SD1_PIX2PIX)) {
             return sd::ops::chunk(vae_output, 2, 2)[0];
         } else {
             return gaussian_latent_sample(vae_output, rng);
@@ -818,7 +824,7 @@ struct AutoEncoderKL : public VAE {
     }
 
     sd::Tensor<float> diffusion_to_vae_latents(const sd::Tensor<float>& latents) override {
-        auto latents_ = sd_version_is_sefi_image(version) ? sd::ops::slice(latents, 2, 16, 144) : latents;
+        auto latents_ = sd_version_is_sefi_image(version) && latents.shape()[2] == 144 ? sd::ops::slice(latents, 2, 16, 144) : latents;
         if (sd_version_uses_flux2_vae(version)) {
             int channel_dim                = 2;
             auto [mean_tensor, std_tensor] = get_latents_mean_std(latents_, channel_dim);

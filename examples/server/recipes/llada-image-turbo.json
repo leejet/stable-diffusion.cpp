@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "id": "llada-image-turbo",
+  "name": "LLaDA Image Turbo",
+  "size_multiple": 16,
+  "description": "Use matching turbo text encoder and connectors. Editing needs connectors that include the SigVQ encoder.",
+  "model_url": "https://huggingface.co/inclusionAI/LLaDA-Image-Turbo",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "LLaDA-Image Text Encoder"
+    },
+    {
+      "id": "tokenizer",
+      "required": true,
+      "label": "LLaDA tokenizer.json"
+    },
+    {
+      "id": "embeddings_connectors",
+      "required": true,
+      "label": "LLaDA Turbo Connectors"
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "cfg_scale": 1,
+    "steps": 4,
+    "width": 1024,
+    "height": 1024,
+    "sampling_method": "euler"
+  },
+  "features": [
+    "ref_images"
+  ]
+}

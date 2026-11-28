@@ -66,13 +66,19 @@ add_executable(${TARGET}
     ../common/common.cpp
     ../common/log.cpp
     ../common/media_io.cpp
+    ../common/media_metadata.cpp
     main.cpp
+    server_access.cpp
     runtime.cpp
+    model_catalog.cpp
+    routes_models.cpp
     async_jobs.cpp
     routes_index.cpp
     routes_openai.cpp
     routes_sdapi.cpp
     routes_sdcpp.cpp
+    routes_dgl.cpp
+    routes_media.cpp
 )
 if(APPLE)
     sd_set_macos_rpaths(${TARGET})
@@ -87,6 +93,17 @@ if(HAVE_FRONTEND_BUILD)
 else()
     message(STATUS "HAVE_INDEX_HTML disabled")
 endif()
+
+file(GLOB BUILTIN_RECIPE_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/recipes/*.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${BUILTIN_RECIPE_FILES})
+# Keep recipes in separate literals to stay within MSVC's string size limit.
+set(SD_BUILTIN_RECIPES "")
+foreach(RECIPE_FILE IN LISTS BUILTIN_RECIPE_FILES)
+    file(READ "${RECIPE_FILE}" RECIPE_JSON)
+    string(APPEND SD_BUILTIN_RECIPES "R\"recipes(${RECIPE_JSON})recipes\",\n")
+endforeach()
+configure_file(recipes_builtin.h.in "${CMAKE_CURRENT_BINARY_DIR}/recipes_builtin.h" @ONLY)
+target_include_directories(${TARGET} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 
 install(TARGETS ${TARGET} RUNTIME)
 target_link_libraries(${TARGET} PRIVATE stable-diffusion ${CMAKE_THREAD_LIBS_INIT})

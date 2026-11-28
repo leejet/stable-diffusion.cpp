@@ -4,11 +4,123 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
+#include <optional>
+#include "log.h"
 #include "stable-diffusion.h"
+
+struct SDImage {
+    uint32_t width;
+    uint32_t height;
+    uint32_t channel;
+    uint8_t* data;
+    sd_tensor_t* storage = nullptr;
+};
+
+struct SDAudio {
+    uint32_t sample_rate;
+    uint32_t channels;
+    uint64_t sample_count;
+    float* data;
+    sd_tensor_t* storage = nullptr;
+};
+
+struct SDReferenceVideo {
+    SDImage* frames;
+    int frame_count;
+    int fps;
+    SDAudio audio;
+};
+
+struct SDTensorDeleter {
+    void operator()(sd_tensor_t* tensor) const { sd_tensor_free(tensor); }
+};
+using SDTensorPtr = std::unique_ptr<sd_tensor_t, SDTensorDeleter>;
+
+static inline SDImage tensor_image_view(const sd_tensor_t* tensor) {
+    if (!tensor)
+        return {};
+    return {uint32_t(sd_tensor_dim(tensor, 1)), uint32_t(sd_tensor_dim(tensor, 2)), uint32_t(sd_tensor_dim(tensor, 0)),
+            const_cast<uint8_t*>(static_cast<const uint8_t*>(sd_tensor_data(tensor)))};
+}
+
+static inline void sd_image_free(SDImage* image) {
+    if (!image)
+        return;
+    if (image->storage)
+        sd_tensor_free(image->storage);
+    else
+        free(image->data);
+    *image = {};
+}
+
+static inline void free_sd_audio(SDAudio* audio) {
+    if (!audio)
+        return;
+    if (audio->storage)
+        sd_tensor_free(audio->storage);
+    else
+        free(audio->data);
+    free(audio);
+}
+
+static inline SDTensorPtr image_tensor(const SDImage& image) {
+    if (!image.data)
+        return {};
+    if (image.storage && sd_tensor_data(image.storage) == image.data &&
+        sd_tensor_dim(image.storage, 0) == image.channel && sd_tensor_dim(image.storage, 1) == image.width && sd_tensor_dim(image.storage, 2) == image.height)
+        return SDTensorPtr(sd_tensor_retain(image.storage));
+    const int64_t shape[] = {image.channel, image.width, image.height};
+    return SDTensorPtr(sd_tensor_create(SD_TENSOR_U8, 3, shape, image.data, size_t(image.width) * image.height * image.channel));
+}
+
+static inline SDTensorPtr audio_tensor(const SDAudio& audio) {
+    if (!audio.data)
+        return {};
+    if (audio.storage)
+        return SDTensorPtr(sd_tensor_retain(audio.storage));
+    const int64_t shape[] = {audio.channels, static_cast<int64_t>(audio.sample_count)};
+    return SDTensorPtr(sd_tensor_create(SD_TENSOR_F32, 2, shape, audio.data, size_t(audio.sample_count) * audio.channels * sizeof(float)));
+}
+
+static inline SDTensorPtr frames_tensor(const SDImage* frames, size_t count) {
+    if (!frames || !count)
+        return {};
+    const auto& first        = frames[0];
+    const size_t frame_bytes = size_t(first.width) * first.height * first.channel;
+    if (!frame_bytes || count > SIZE_MAX / frame_bytes) {
+        LOG_ERROR("invalid video frame storage size");
+        return {};
+    }
+    std::vector<uint8_t> pixels(frame_bytes * count);
+    for (size_t i = 0; i < count; ++i) {
+        if (!frames[i].data || frames[i].width != first.width || frames[i].height != first.height || frames[i].channel != first.channel) {
+            LOG_ERROR("video frames must have matching dimensions and channels");
+            return {};
+        }
+        memcpy(pixels.data() + i * frame_bytes, frames[i].data, frame_bytes);
+    }
+    const int64_t shape[] = {first.channel, first.width, first.height, static_cast<int64_t>(count)};
+    return SDTensorPtr(sd_tensor_create(SD_TENSOR_U8, 4, shape, pixels.data(), pixels.size()));
+}
+
+static inline SDAudio* retain_result_audio(const sd_result_t* result) {
+    const auto* audio = sd_result_get_audio(result);
+    if (!audio)
+        return nullptr;
+    auto* view = static_cast<SDAudio*>(malloc(sizeof(SDAudio)));
+    if (!view)
+        return nullptr;
+    *view = {audio->sample_rate, uint32_t(sd_tensor_dim(audio->data, 0)), uint64_t(sd_tensor_dim(audio->data, 1)),
+             const_cast<float*>(static_cast<const float*>(sd_tensor_data(audio->data))), sd_tensor_retain(audio->data)};
+    return view;
+}
 
 struct FreeDeleter {
     void operator()(void* ptr) const {
@@ -27,23 +139,15 @@ struct FileCloser {
 struct SDCtxDeleter {
     void operator()(sd_ctx_t* ctx) const {
         if (ctx != nullptr) {
-            free_sd_ctx(ctx);
+            sd_ctx_free(ctx);
         }
     }
 };
 
 struct UpscalerCtxDeleter {
-    void operator()(upscaler_ctx_t* ctx) const {
+    void operator()(sd_upscaler_t* ctx) const {
         if (ctx != nullptr) {
-            free_upscaler_ctx(ctx);
-        }
-    }
-};
-
-struct ADetailerCtxDeleter {
-    void operator()(adetailer_ctx_t* ctx) const {
-        if (ctx != nullptr) {
-            free_adetailer_ctx(ctx);
+            sd_upscaler_free(ctx);
         }
     }
 };
@@ -51,14 +155,210 @@ struct ADetailerCtxDeleter {
 template <typename T>
 using FreeUniquePtr = std::unique_ptr<T, FreeDeleter>;
 
-using FilePtr         = std::unique_ptr<FILE, FileCloser>;
-using SDCtxPtr        = std::unique_ptr<sd_ctx_t, SDCtxDeleter>;
-using UpscalerCtxPtr  = std::unique_ptr<upscaler_ctx_t, UpscalerCtxDeleter>;
-using ADetailerCtxPtr = std::unique_ptr<adetailer_ctx_t, ADetailerCtxDeleter>;
+using FilePtr        = std::unique_ptr<FILE, FileCloser>;
+using SDCtxPtr       = std::unique_ptr<sd_ctx_t, SDCtxDeleter>;
+using UpscalerCtxPtr = std::unique_ptr<sd_upscaler_t, UpscalerCtxDeleter>;
+
+struct SDOptDeleter {
+    void operator()(sd_opt_t* opt) const { sd_opt_free(opt); }
+};
+struct SDResultDeleter {
+    void operator()(sd_result_t* result) const { sd_result_free(result); }
+};
+using SDOptPtr    = std::unique_ptr<sd_opt_t, SDOptDeleter>;
+using SDResultPtr = std::unique_ptr<sd_result_t, SDResultDeleter>;
+
+class SDOptBuilder {
+    SDOptPtr opt;
+    sd_status_t status;
+
+public:
+    explicit SDOptBuilder(sd_opt_t* value)
+        : opt(value), status(value ? SD_STATUS_OK : SD_STATUS_OUT_OF_MEMORY) {}
+    SDOptPtr finish() { return status == SD_STATUS_OK ? std::move(opt) : SDOptPtr{}; }
+    void unset(const char* key) {
+        if (status == SD_STATUS_OK)
+            status = sd_opt_unset(opt.get(), key);
+    }
+    void set_floats(const char* key, const std::optional<std::vector<float>>& value) {
+        if (value)
+            set_floats(key, value->data(), value->size());
+    }
+    void set_bool(const char* key, const std::optional<bool>& value) {
+        if (value)
+            set_bool(key, *value);
+    }
+    template <typename T>
+    void set_int(const char* key, const std::optional<T>& value) {
+        if (value)
+            set_int(key, *value);
+    }
+    template <typename T>
+    void set_float(const char* key, const std::optional<T>& value) {
+        if (value)
+            set_float(key, *value);
+    }
+    void set_string(const char* key, const std::optional<std::string>& value) {
+        if (value)
+            set_string(key, *value);
+    }
+    void set_bool(const char* key, bool value) {
+        if (status == SD_STATUS_OK)
+            status = sd_opt_set_bool(opt.get(), key, value);
+    }
+    void set_int(const char* key, int64_t value) {
+        if (status == SD_STATUS_OK)
+            status = sd_opt_set_int(opt.get(), key, value);
+    }
+    void set_float(const char* key, double value) {
+        if (status == SD_STATUS_OK)
+            status = sd_opt_set_float(opt.get(), key, value);
+    }
+    void set_string(const char* key, const std::string& value) {
+        if (status == SD_STATUS_OK)
+            status = sd_opt_set_string(opt.get(), key, value.c_str());
+    }
+    void set_string(const char* key, const char* value) {
+        if (value && status == SD_STATUS_OK)
+            status = sd_opt_set_string(opt.get(), key, value);
+    }
+    void set_image(const char* key, const SDImage& value) {
+        if (!value.data || status != SD_STATUS_OK)
+            return;
+        auto tensor = image_tensor(value);
+        if (!tensor) {
+            status = SD_STATUS_INVALID_ARGUMENT;
+            return;
+        }
+        status = sd_opt_set_tensor(opt.get(), key, tensor.get());
+    }
+    void set_images(const char* key, const SDImage* value, size_t count) {
+        if (status != SD_STATUS_OK)
+            return;
+        std::vector<SDTensorPtr> storage;
+        std::vector<const sd_tensor_t*> tensors;
+        storage.reserve(count);
+        tensors.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            storage.push_back(image_tensor(value[i]));
+            if (!storage.back()) {
+                status = SD_STATUS_INVALID_ARGUMENT;
+                return;
+            }
+            tensors.push_back(storage.back().get());
+        }
+        status = sd_opt_set_tensors(opt.get(), key, tensors.data(), count);
+    }
+    void set_frames(const char* key, const SDImage* value, size_t count) {
+        if (!count || status != SD_STATUS_OK)
+            return;
+        auto tensor = frames_tensor(value, count);
+        if (!tensor) {
+            status = SD_STATUS_INVALID_ARGUMENT;
+            return;
+        }
+        status = sd_opt_set_tensor(opt.get(), key, tensor.get());
+    }
+    void set_floats(const char* key, const float* value, size_t count) {
+        if (status == SD_STATUS_OK)
+            status = sd_opt_set_floats(opt.get(), key, value, count);
+    }
+    void set_ints(const char* key, const int32_t* value, size_t count) {
+        if (status == SD_STATUS_OK)
+            status = sd_opt_set_ints(opt.get(), key, value, count);
+    }
+    void set_loras(const char* key, const sd_lora_t* value, size_t count) {
+        if (status == SD_STATUS_OK)
+            status = sd_opt_set_loras(opt.get(), key, value, count);
+    }
+    void set_embeddings(const char* key, const sd_embedding_t* value, size_t count) {
+        if (status == SD_STATUS_OK)
+            status = sd_opt_set_embeddings(opt.get(), key, value, count);
+    }
+    void set_audios(const char* key, const SDAudio* value, size_t count) {
+        if (status != SD_STATUS_OK)
+            return;
+        std::vector<SDTensorPtr> storage;
+        std::vector<sd_audio_t> audios;
+        storage.reserve(count);
+        audios.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            storage.push_back(audio_tensor(value[i]));
+            audios.push_back({value[i].sample_rate, storage.back().get()});
+        }
+        status = sd_opt_set_audios(opt.get(), key, audios.data(), count);
+    }
+    void set_videos(const char* key, const SDReferenceVideo* value, size_t count) {
+        if (status != SD_STATUS_OK)
+            return;
+        std::vector<SDTensorPtr> storage;
+        std::vector<sd_video_t> videos;
+        storage.reserve(count * 2);
+        videos.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            storage.push_back(frames_tensor(value[i].frames, value[i].frame_count));
+            const auto* frames = storage.back().get();
+            storage.push_back(audio_tensor(value[i].audio));
+            videos.push_back({frames, value[i].fps, {value[i].audio.sample_rate, storage.back().get()}});
+        }
+        status = sd_opt_set_videos(opt.get(), key, videos.data(), count);
+    }
+};
+
+static inline sd_ctx_t* create_sd_context(const SDOptPtr& opt) {
+    sd_ctx_t* ctx = nullptr;
+    if (opt)
+        sd_ctx_create(opt.get(), &ctx);
+    return ctx;
+}
+
+static inline bool generate_sd_image(sd_ctx_t* ctx, const SDOptPtr& opt, sd_result_t** result) {
+    if (result)
+        *result = nullptr;
+    return opt && sd_generate_image(ctx, opt.get(), result) == SD_STATUS_OK;
+}
+
+static inline bool generate_sd_video(sd_ctx_t* ctx, const SDOptPtr& opt, sd_result_t** result) {
+    if (result)
+        *result = nullptr;
+    return opt && sd_generate_video(ctx, opt.get(), result) == SD_STATUS_OK;
+}
+
+static inline sd_upscaler_t* create_sd_upscaler(const char* path, std::optional<bool> direct, std::optional<int> threads, std::optional<int> tile, const char* backend, const char* params_backend, const std::optional<std::string>& linear_type) {
+    SDOptPtr opt(sd_upscaler_opt_create());
+    if (!opt || sd_opt_set_string(opt.get(), "model_path", path) != SD_STATUS_OK ||
+        (direct && sd_opt_set_bool(opt.get(), "conv_direct", *direct) != SD_STATUS_OK) ||
+        (tile && sd_opt_set_int(opt.get(), "tile_size", *tile) != SD_STATUS_OK) ||
+        (threads && sd_opt_set_int(opt.get(), "n_threads", *threads) != SD_STATUS_OK) ||
+        (backend && sd_opt_set_string(opt.get(), "backend", backend) != SD_STATUS_OK) ||
+        (params_backend && sd_opt_set_string(opt.get(), "params_backend", params_backend) != SD_STATUS_OK) ||
+        (linear_type && sd_opt_set_string(opt.get(), "linear_type", linear_type->c_str()) != SD_STATUS_OK))
+        return nullptr;
+    sd_upscaler_t* result = nullptr;
+    sd_upscaler_create(opt.get(), &result);
+    return result;
+}
+
+static inline bool upscale_sd_image(sd_upscaler_t* ctx, SDImage image, sd_result_t** result, int repeats = 1, int factor = 0) {
+    if (result)
+        *result = nullptr;
+    SDOptPtr opt(sd_upscale_opt_create());
+    auto tensor = image_tensor(image);
+    return opt && tensor && sd_opt_set_tensor(opt.get(), "image", tensor.get()) == SD_STATUS_OK &&
+           (!factor || sd_opt_set_int(opt.get(), "factor", factor) == SD_STATUS_OK) &&
+           sd_opt_set_int(opt.get(), "repeats", repeats) == SD_STATUS_OK && sd_upscale(ctx, opt.get(), result) == SD_STATUS_OK;
+}
+
+static inline SDImage take_result_image(sd_result_t* result, size_t index) {
+    const auto* tensor = sd_result_get_image(result, index);
+    auto image         = tensor_image_view(tensor);
+    image.storage      = sd_tensor_retain(tensor);
+    return image;
+}
 
 class SDImageOwner {
 private:
-    static sd_image_t copy_image(const sd_image_t& image) {
+    static SDImage copy_image(const SDImage& image) {
         if (image.data == nullptr) {
             return {image.width, image.height, image.channel, nullptr};
         }
@@ -73,11 +373,12 @@ private:
         return {image.width, image.height, image.channel, raw_copy};
     }
 
-    sd_image_t image_ = {0, 0, 0, nullptr};
+    SDImage image_ = {0, 0, 0, nullptr};
+    SDTensorPtr public_tensor_;
 
 public:
     SDImageOwner() = default;
-    explicit SDImageOwner(sd_image_t image)
+    explicit SDImageOwner(SDImage image)
         : image_(image) {
     }
 
@@ -108,9 +409,14 @@ public:
         reset();
     }
 
-    sd_image_t* put() {
+    const sd_tensor_t* tensor() {
+        public_tensor_ = image_tensor(image_);
+        return public_tensor_.get();
+    }
+
+    SDImage* put() {
         if (image_.data != nullptr) {
-            free(image_.data);
+            sd_image_free(&image_);
             image_.data = nullptr;
         }
         image_.width   = 0;
@@ -119,23 +425,23 @@ public:
         return &image_;
     }
 
-    sd_image_t& get() {
+    SDImage& get() {
         return image_;
     }
 
-    const sd_image_t& get() const {
+    const SDImage& get() const {
         return image_;
     }
 
-    sd_image_t release() {
-        sd_image_t image = image_;
-        image_           = {0, 0, 0, nullptr};
+    SDImage release() {
+        SDImage image = image_;
+        image_        = {0, 0, 0, nullptr};
         return image;
     }
 
-    void reset(sd_image_t image = {0, 0, 0, nullptr}) {
+    void reset(SDImage image = {0, 0, 0, nullptr}) {
         if (image_.data != nullptr) {
-            free(image_.data);
+            sd_image_free(&image_);
         }
         image_ = image;
     }
@@ -160,7 +466,7 @@ public:
         return samples_.empty();
     }
 
-    sd_audio_t get() {
+    SDAudio get() {
         return {sample_rate_,
                 channels_,
                 channels_ == 0 ? 0 : static_cast<uint64_t>(samples_.size() / channels_),
@@ -174,7 +480,8 @@ public:
 
 class SDImageVec {
 private:
-    std::vector<sd_image_t> images_;
+    std::vector<SDImage> images_;
+    std::vector<std::string> generation_infos_;
 
 public:
     SDImageVec() = default;
@@ -183,13 +490,14 @@ public:
     SDImageVec& operator=(const SDImageVec&) = delete;
 
     SDImageVec(SDImageVec&& other) noexcept
-        : images_(std::move(other.images_)) {
+        : images_(std::move(other.images_)), generation_infos_(std::move(other.generation_infos_)) {
     }
 
     SDImageVec& operator=(SDImageVec&& other) noexcept {
         if (this != &other) {
             clear();
-            images_ = std::move(other.images_);
+            images_           = std::move(other.images_);
+            generation_infos_ = std::move(other.generation_infos_);
         }
         return *this;
     }
@@ -198,7 +506,7 @@ public:
         clear();
     }
 
-    void push_back(sd_image_t image) {
+    void push_back(SDImage image) {
         images_.push_back(image);
     }
 
@@ -210,7 +518,36 @@ public:
         images_.reserve(count);
     }
 
-    void adopt(sd_image_t* images, int count) {
+    const std::string& generation_info(size_t index) const {
+        static const std::string empty;
+        return index < generation_infos_.size() ? generation_infos_[index] : empty;
+    }
+
+    void set_generation_info(size_t index, const std::string& source) {
+        generation_infos_.resize(images_.size());
+        generation_infos_.at(index) = source;
+    }
+
+    void adopt(sd_result_t* result) {
+        clear();
+        SDResultPtr owner(result);
+        if (!result)
+            return;
+        const size_t count = sd_result_get_image_count(result);
+        images_.reserve(count);
+        generation_infos_.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            const auto* source = sd_result_get_generation_info(result, i);
+            generation_infos_.emplace_back(source ? source : "");
+            images_.push_back(take_result_image(result, i));
+        }
+    }
+
+    void adopt_video(sd_result_t* result) {
+        adopt(result);
+    }
+
+    void adopt(SDImage* images, int count) {
         clear();
         if (images == nullptr || count <= 0) {
             free(images);
@@ -240,36 +577,37 @@ public:
         return !images_.empty();
     }
 
-    sd_image_t* data() {
+    SDImage* data() {
         return images_.data();
     }
 
-    const sd_image_t* data() const {
+    const SDImage* data() const {
         return images_.data();
     }
 
-    sd_image_t& operator[](size_t index) {
+    SDImage& operator[](size_t index) {
         return images_[index];
     }
 
-    const sd_image_t& operator[](size_t index) const {
+    const SDImage& operator[](size_t index) const {
         return images_[index];
     }
 
-    std::vector<sd_image_t>& raw() {
+    std::vector<SDImage>& raw() {
         return images_;
     }
 
-    const std::vector<sd_image_t>& raw() const {
+    const std::vector<SDImage>& raw() const {
         return images_;
     }
 
     void clear() {
-        for (sd_image_t& image : images_) {
-            free(image.data);
+        for (SDImage& image : images_) {
+            sd_image_free(&image);
             image.data = nullptr;
         }
         images_.clear();
+        generation_infos_.clear();
     }
 };
 

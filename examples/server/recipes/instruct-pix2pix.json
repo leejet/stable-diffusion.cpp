@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "id": "instruct-pix2pix",
+  "name": "Instruct-Pix2Pix",
+  "size_multiple": 64,
+  "description": "Supply the image to edit as a reference image.",
+  "model_url": "https://huggingface.co/timbrooks/instruct-pix2pix",
+  "slots": [
+    {
+      "id": "model",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "defaults": {
+    "img_cfg_scale": 1,
+    "sampling_method": "euler_a",
+    "scheduler": "karras",
+    "steps": 10
+  },
+  "features": [
+    "cache_unet",
+    "clip_skip",
+    "img_cfg",
+    "ref_images"
+  ],
+  "disabled_features": [
+    "cache_dit"
+  ]
+}

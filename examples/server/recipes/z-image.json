@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "id": "z-image",
+  "name": "Z-Image",
+  "model_url": "https://huggingface.co/Tongyi-MAI/Z-Image",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Qwen 3 Text Encoder"
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "cfg_scale": 4,
+    "steps": 20,
+    "width": 720,
+    "height": 1280,
+    "sampling_method": "euler"
+  },
+  "features": [
+    "flow_shift"
+  ]
+}

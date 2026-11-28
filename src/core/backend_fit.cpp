@@ -1,4 +1,5 @@
 #include "backend_fit.h"
+#include "config.h"
 
 #include <algorithm>
 #include <cctype>
@@ -20,6 +21,7 @@
 #include "core/ggml_extend_backend.h"
 #include "core/util.h"
 #include "ggml-backend.h"
+#include "name_conversion.h"
 
 namespace sd::backend_fit {
 
@@ -42,8 +44,9 @@ namespace sd::backend_fit {
     struct Device {
         std::string name;
         std::string description;
-        int64_t free_bytes   = 0;
-        int64_t budget_bytes = 0;
+        int64_t free_bytes              = 0;
+        int64_t budget_bytes            = 0;
+        enum ggml_backend_dev_type type = GGML_BACKEND_DEVICE_TYPE_GPU;
     };
 
     enum class ParamsLocation {
@@ -73,7 +76,11 @@ namespace sd::backend_fit {
     static bool classify_tensor(const std::string& name, ComponentKind& out) {
         auto contains = [&](const char* s) { return name.find(s) != std::string::npos; };
 
-        if (contains("model.diffusion_model.") || contains("unet.")) {
+        if (is_cond_stage_model_name(name)) {
+            out = ComponentKind::CONDITIONER;
+            return true;
+        }
+        if (contains("model.diffusion_model.") || contains("unet.") || name.rfind("diffusion.", 0) == 0) {
             out = ComponentKind::DIT;
             return true;
         }
@@ -88,7 +95,6 @@ namespace sd::backend_fit {
             contains("te.text_model.") ||
             contains("conditioner") ||
             name.rfind("text_encoder.", 0) == 0 ||
-            name.rfind("text_embedding_projection.", 0) == 0 ||
             contains(".aggregate_embed.")) {
             out = ComponentKind::CONDITIONER;
             return true;
@@ -96,13 +102,13 @@ namespace sd::backend_fit {
         return false;
     }
 
-    static std::vector<Component> estimate_components(ModelLoader& loader, ggml_type override_wtype) {
+    static std::vector<Component> estimate_components(ModelLoader& loader, ggml_type override_wtype, const char* standalone_name = nullptr) {
         int64_t bytes[3]          = {0, 0, 0};
         int64_t largest_tensor[3] = {0, 0, 0};
         for (const auto& [name, stored_tensor] : loader.get_tensor_storage_map()) {
-            TensorStorage ts = stored_tensor;
-            ComponentKind kind;
-            if (!classify_tensor(ts.name, kind)) {
+            TensorStorage ts   = stored_tensor;
+            ComponentKind kind = ComponentKind::DIT;
+            if (!standalone_name && !classify_tensor(ts.name, kind)) {
                 continue;
             }
             if (ts.expected_type != GGML_TYPE_COUNT) {
@@ -116,7 +122,7 @@ namespace sd::backend_fit {
         }
 
         return {
-            {ComponentKind::DIT, "DiT", bytes[int(ComponentKind::DIT)], 2048 * MiB, largest_tensor[int(ComponentKind::DIT)]},
+            {ComponentKind::DIT, standalone_name ? standalone_name : "DiT", bytes[int(ComponentKind::DIT)], 2048 * MiB, largest_tensor[int(ComponentKind::DIT)]},
             {ComponentKind::CONDITIONER, "Conditioner", bytes[int(ComponentKind::CONDITIONER)], 2048 * MiB, largest_tensor[int(ComponentKind::CONDITIONER)]},
             {ComponentKind::VAE, "VAE", bytes[int(ComponentKind::VAE)], 1024 * MiB, largest_tensor[int(ComponentKind::VAE)]},
         };
@@ -128,20 +134,24 @@ namespace sd::backend_fit {
     }
 
     static std::vector<Device> enumerate_gpu_devices(const sd::ggml_graph_cut::MaxVramAssignment& budgets,
-                                                     bool include_other_devices) {
+                                                     bool include_other_devices,
+                                                     const AvailableVRAM& available_vram) {
         std::vector<Device> out;
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
             ggml_backend_dev_t dev = ggml_backend_dev_get(i);
             const auto type        = ggml_backend_dev_type(dev);
-            if (type != GGML_BACKEND_DEVICE_TYPE_GPU &&
+            if (type != GGML_BACKEND_DEVICE_TYPE_GPU && type != GGML_BACKEND_DEVICE_TYPE_IGPU &&
                 (!include_other_devices || type == GGML_BACKEND_DEVICE_TYPE_CPU)) {
                 continue;
             }
             Device device;
             device.name        = ggml_backend_dev_name(dev);
             device.description = ggml_backend_dev_description(dev);
+            device.type        = type;
             size_t free_bytes = 0, total_bytes = 0;
             ggml_backend_dev_memory(dev, &free_bytes, &total_bytes);
+            if (available_vram)
+                free_bytes = available_vram(dev, free_bytes, total_bytes);
             device.free_bytes = (int64_t)free_bytes;
 
             float gib = budgets.default_gib;
@@ -161,12 +171,13 @@ namespace sd::backend_fit {
         return out;
     }
 
-    static int64_t available_ram_bytes() {
+    int64_t available_ram_bytes() {
 #if defined(_WIN32)
         MEMORYSTATUSEX status{};
         status.dwLength = sizeof(status);
         if (GlobalMemoryStatusEx(&status)) {
-            return (int64_t)status.ullAvailPhys;
+            // Commit exhaustion can reject allocations while physical RAM is still available.
+            return (int64_t)std::min(status.ullAvailPhys, status.ullAvailPageFile);
         }
 #elif defined(__linux__)
         std::ifstream meminfo("/proc/meminfo");
@@ -183,7 +194,7 @@ namespace sd::backend_fit {
         vm_statistics64_data_t stats{};
         mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
         const bool ok                = host_page_size(host, &page_size) == KERN_SUCCESS &&
-                        host_statistics64(host, HOST_VM_INFO64, (host_info64_t)&stats, &count) == KERN_SUCCESS;
+                                       host_statistics64(host, HOST_VM_INFO64, (host_info64_t)&stats, &count) == KERN_SUCCESS;
         mach_port_deallocate(mach_task_self(), host);
         if (ok) {
             return ((int64_t)stats.free_count + stats.inactive_count) * page_size;
@@ -192,15 +203,34 @@ namespace sd::backend_fit {
         return -1;
     }
 
+    int64_t available_commit_bytes() {
+#ifdef _WIN32
+        MEMORYSTATUSEX status{};
+        status.dwLength = sizeof(status);
+        if (GlobalMemoryStatusEx(&status))
+            return static_cast<int64_t>(status.ullAvailPageFile);
+#endif
+        return -1;
+    }
+
     static size_t select_main_device(const std::vector<Device>& devices) {
-        size_t main_device = SIZE_MAX;
-        for (size_t di = 0; di < devices.size(); ++di) {
-            if (devices[di].budget_bytes > 0 &&
-                (main_device == SIZE_MAX || devices[di].budget_bytes > devices[main_device].budget_bytes)) {
-                main_device = di;
+        // Shared system memory must not make an integrated GPU outrank a discrete GPU.
+        for (bool discrete : {true, false}) {
+            size_t main_device = SIZE_MAX;
+            for (size_t di = 0; di < devices.size(); ++di) {
+                if ((devices[di].type == GGML_BACKEND_DEVICE_TYPE_GPU) != discrete) {
+                    continue;
+                }
+                if (devices[di].budget_bytes > 0 &&
+                    (main_device == SIZE_MAX || devices[di].budget_bytes > devices[main_device].budget_bytes)) {
+                    main_device = di;
+                }
+            }
+            if (main_device != SIZE_MAX) {
+                return main_device;
             }
         }
-        return main_device;
+        return SIZE_MAX;
     }
 
     static Plan compute_plan(const std::vector<Component>& components,
@@ -262,10 +292,10 @@ namespace sd::backend_fit {
 
             const auto& runtime_devices = plan.runtimes[ci].devices;
             const bool fits_runtime     = !runtime_devices.empty() &&
-                                      std::all_of(runtime_devices.begin(), runtime_devices.end(), [&](size_t di) {
+                                          std::all_of(runtime_devices.begin(), runtime_devices.end(), [&](size_t di) {
                                           const int64_t headroom = headroom_for(ci, di);
                                           return headroom <= remaining[di] && comp.params_bytes <= remaining[di] - headroom;
-                                      });
+                                          });
             if (fits_runtime) {
                 decision.params_location = ParamsLocation::MAIN_GPU;
                 decision.params_device   = runtime_devices.front();
@@ -415,11 +445,12 @@ namespace sd::backend_fit {
         return true;
     }
 
-    bool derive_backend_specs(ModelLoader& loader,
-                              ggml_type override_wtype,
-                              sd::ggml_graph_cut::MaxVramAssignment& budgets,
-                              std::string& runtime_spec,
-                              std::string& params_spec) {
+    static bool derive_component_specs(const std::vector<Component>& components,
+                                       sd::ggml_graph_cut::MaxVramAssignment& budgets,
+                                       std::string& runtime_spec,
+                                       std::string& params_spec,
+                                       const AvailableVRAM& available_vram,
+                                       size_t max_ram_bytes) {
         std::string error;
         if (!budgets.canonicalize_backend_keys(&error)) {
             LOG_ERROR("%s", error.c_str());
@@ -428,16 +459,17 @@ namespace sd::backend_fit {
 
         // Resolve once to ensure dynamic backends are loaded before enumerating devices.
         sd_backend_resolve_name("");
-        const auto components = estimate_components(loader, override_wtype);
-        const auto devices    = enumerate_gpu_devices(budgets, !runtime_spec.empty());
+        const auto devices = enumerate_gpu_devices(budgets, !runtime_spec.empty(), available_vram);
         std::vector<Runtime> runtimes;
         if (!runtime_spec.empty() && !resolve_runtimes(components, devices, runtime_spec, runtimes, error)) {
             LOG_ERROR("%s", error.c_str());
             return false;
         }
-        const int64_t free_ram   = available_ram_bytes();
-        const int64_t ram_budget = std::max<int64_t>(free_ram - std::max<int64_t>(2048 * MiB, free_ram / 10), 0);
-        const auto plan          = compute_plan(components, devices, ram_budget, runtimes);
+        const int64_t free_ram = available_ram_bytes();
+        int64_t ram_budget     = std::max<int64_t>(free_ram - std::max<int64_t>(2048 * MiB, free_ram / 10), 0);
+        if (max_ram_bytes)
+            ram_budget = static_cast<int64_t>(std::min<uint64_t>(ram_budget, max_ram_bytes));
+        const auto plan = compute_plan(components, devices, ram_budget, runtimes);
         params_spec.clear();
         if (!plan.valid) {
             if (devices.empty()) {
@@ -478,7 +510,33 @@ namespace sd::backend_fit {
         return true;
     }
 
-    bool prepare_vae_decode_retry_tiling(sd_tiling_params_t& tiling_params,
+    std::string select_default_backend(const sd::ggml_graph_cut::MaxVramAssignment& budgets, const AvailableVRAM& available_vram) {
+        const auto fallback = sd_backend_resolve_name("");
+        const auto devices  = enumerate_gpu_devices(budgets, false, available_vram);
+        const auto selected = select_main_device(devices);
+        return selected == SIZE_MAX ? fallback : devices[selected].name;
+    }
+
+    bool derive_backend_specs(ModelLoader& loader,
+                              ggml_type override_wtype,
+                              sd::ggml_graph_cut::MaxVramAssignment& budgets,
+                              std::string& runtime_spec,
+                              std::string& params_spec,
+                              const AvailableVRAM& available_vram,
+                              size_t max_ram_bytes) {
+        return derive_component_specs(estimate_components(loader, override_wtype), budgets, runtime_spec, params_spec,
+                                      available_vram, max_ram_bytes);
+    }
+
+    bool derive_backend_specs(ModelLoader& loader,
+                              ggml_type override_wtype,
+                              sd::ggml_graph_cut::MaxVramAssignment& budgets,
+                              std::string& runtime_spec,
+                              std::string& params_spec) {
+        return derive_backend_specs(loader, override_wtype, budgets, runtime_spec, params_spec, {});
+    }
+
+    bool prepare_vae_decode_retry_tiling(sd::TilingConfig& tiling_params,
                                          bool prefer_temporal_tiling,
                                          ggml_status status,
                                          int latent_tile_size_w,
@@ -497,11 +555,7 @@ namespace sd::backend_fit {
                 return false;
             }
             auto smaller_tile = [&](int size) {
-                int next_size = size / 2;
-                if (!tiling_params.enabled) {
-                    next_size = std::min(next_size, 256 / scale_factor);
-                }
-                return std::min(size, std::max(4, next_size));
+                return std::min(size, std::max(4, size / 2));
             };
             const int tile_size_w = smaller_tile(latent_tile_size_w);
             const int tile_size_h = smaller_tile(latent_tile_size_h);

@@ -10,3 +10,6 @@
 [submodule "thirdparty/libwebm"]
 	path = thirdparty/libwebm
 	url = https://github.com/webmproject/libwebm.git
+[submodule "thirdparty/cutlass"]
+	path = thirdparty/cutlass
+	url = https://github.com/NVIDIA/cutlass.git

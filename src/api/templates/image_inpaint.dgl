@@ -1,0 +1,147 @@
+# version: 0.0.0
+
+var {
+{{variables}}
+}
+
+{% include "image_helpers" %}
+
+fn main({{inputs}}) {
+    base_model = {{model_loader}}(model_path{{model_options}})
+    base_text = load_text_encoder(text_path{{text_options}})
+    vae = {{vae_loader}}(vae_path{{vae_options}})
+{{loras}}
+    model = {{patched_model}}
+    text = {{patched_text}}
+    encode_rng = make_rng(rng_type, seed = seed)
+{% if flags.has_init %}
+    source = fit_canvas(input_image, width, height, mode = "nearest")
+    image_base = {{from_vae}}(vae, vae_encode(vae, image::to_f32(source, channels = {{channels}}), rng = encode_rng{{vae_run_options}}))
+{% else %}
+    image_base = tensor::zeros(latent_shape(vae, width = width, height = height))
+{% endif %}
+    base = image_base
+{{references}}
+{% if flags.unet_edit %}
+{% if flags.references %}
+    edit_latent = tensor::interpolate(reference_latent_0, size = tensor::shape(base)[:2])
+{% else %}
+    edit_latent = tensor::zeros_like(base)
+{% endif %}
+{% if flags.image_guidance %}
+    image_unconditional_concat = tensor::zeros_like(edit_latent)
+{% endif %}
+{% endif %}
+{% if flags.control_image %}
+    control_pixels = image::to_f32(fit_canvas(input_control, width, height, mode = "nearest"), channels = 3)
+{% if flags.native_control %}
+    control_latent = {{from_vae}}(vae, vae_encode(vae, control_pixels, rng = encode_rng{{vae_run_options}}))
+{% else %}
+    control_model = controlnet::load(control_path{{control_options}})
+{% if flags.z_control %}
+    control_encoded = {{from_vae}}(vae, vae_encode(vae, control_pixels, rng = encode_rng, posterior = "mode"{{vae_run_options}}))
+    control_hint = tensor::pad(control_encoded, [0, 0, 0, 0, 0, 33 - tensor::shape(control_encoded)[2]])
+{% endif %}
+{% endif %}
+{% endif %}
+{% if flags.mask_stage %}
+{% if flags.has_mask %}
+    mask_pixels = tensor::threshold(image::to_f32(fit_canvas(tensor::grayscale(input_mask, axis = 0), width, height, mode = "nearest_exact")), threshold = 0.5)
+{% else %}
+    mask_pixels = tensor::full([width, height, 1, 1], 1)
+{% endif %}
+    base_shape = tensor::shape(base)
+    mask_scale = [math::floor(width / base_shape[0]), math::floor(height / base_shape[1])]
+    mask_latent = tensor::max_pool2d(mask_pixels, kernel = mask_scale, stride = mask_scale)
+{% if flags.inpaint_model %}
+{% if flags.flex %}
+    masked_latent = tensor::mul(base, tensor::affine(mask_latent, scale = -1, offset = 1))
+{% elif flags.has_init %}
+    masked_pixels = tensor::lerp(image::to_f32(source, channels = {{channels}}), 0.5, mask_pixels)
+    masked_latent = {{from_vae}}(vae, vae_encode(vae, masked_pixels, rng = encode_rng{{vae_run_options}}))
+{% else %}
+    masked_latent = tensor::zeros_like(base)
+{% endif %}
+{% if flags.flux_fill %}
+    mask_grid = tensor::reshape(mask_pixels, [mask_scale[0], base_shape[0], mask_scale[1], base_shape[1]])
+    mask_channels = tensor::reshape(tensor::permute(mask_grid, [1, 3, 0, 2]), [base_shape[0], base_shape[1], mask_scale[0] * mask_scale[1], 1])
+    inpaint_condition = tensor::concat([masked_latent, mask_channels], axis = 2)
+{% if flags.image_guidance %}
+    image_unconditional_concat = tensor::concat([tensor::zeros_like(masked_latent), mask_channels], axis = 2)
+{% endif %}
+{% elif flags.flex %}
+{% if flags.control_image %}
+    inpaint_condition = tensor::concat([masked_latent, mask_latent, control_latent], axis = 2)
+{% if flags.image_guidance %}
+    image_unconditional_concat = tensor::concat([tensor::zeros_like(masked_latent), mask_latent, tensor::zeros_like(masked_latent)], axis = 2)
+{% endif %}
+{% else %}
+    inpaint_condition = tensor::concat([masked_latent, mask_latent, tensor::zeros_like(base)], axis = 2)
+{% if flags.image_guidance %}
+    image_unconditional_concat = tensor::concat([tensor::zeros_like(masked_latent), mask_latent, tensor::zeros_like(masked_latent)], axis = 2)
+{% endif %}
+{% endif %}
+{% else %}
+    inpaint_condition = tensor::concat([mask_latent, masked_latent], axis = 2)
+{% if flags.image_guidance %}
+    image_unconditional_concat = tensor::concat([mask_latent, tensor::zeros_like(masked_latent)], axis = 2)
+{% endif %}
+{% endif %}
+    denoise_mask = tensor::max_pool2d(mask_latent, kernel = [3, 3], padding_before = [1, 1], padding_after = [1, 1])
+{% endif %}
+{% endif %}
+{% if flags.separate_negative_model %}
+    negative_model = load_dit(negative_model_path{{model_options}})
+{% endif %}
+    positive_text = encode_prompt(text, prompt, width = width, height = height{{prompt_options}})
+{% if flags.minit2i %}
+    negative_text = zero_out(positive_text, fields = ["vector"])
+{% elif flags.ming %}
+    negative_text = zero_out(positive_text)
+{% elif flags.ideogram %}
+    negative_text = {vector = tensor::vector([1])}
+{% else %}
+{% if flags.encode_negative %}
+    negative_text = encode_prompt(text, {{negative_prompt_input}}, width = width, height = height{{negative_prompt_options}})
+{% else %}
+    negative_text = positive_text
+{% endif %}
+{% endif %}
+    positive = positive_text
+{% if flags.sdxl_zero %}
+    negative = sdxl_zero_text(negative_text)
+{% else %}
+    negative = negative_text
+{% endif %}
+{% if flags.control_image_guidance %}
+    image_unconditional_concat = tensor::zeros_like(base)
+{% endif %}
+{% include "image_predictors" %}
+{% if flags.custom_sigmas %}
+    full_sigmas = tensor::vector(custom_sigmas, dtype = "f32")
+{% else %}
+    full_sigmas = make_sigmas({{schedule_predictor}}, latent = base, steps = steps, scheduler = scheduler{{schedule_options}})
+{% endif %}
+{% if flags.has_init %}
+    sigmas = slice_sigmas_by_strength(full_sigmas, strength)
+{% else %}
+    sigmas = full_sigmas
+{% endif %}
+    rng = make_rng(rng_type, seed = seed)
+{% if flags.shared_rng %}
+    sampler_rng = rng
+{% else %}
+    sampler_rng = make_rng(sampler_rng_type, seed = seed)
+{% endif %}
+{% if flags.hidream_o1 %}
+    start = add_noise(guided, base, tensor::mul(tensor::randn_like(base, rng = rng), eta), sigma = sigmas[0])
+{% else %}
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+{% endif %}
+    latent = sample(start, sigmas, predict = guided, method = method, rng = sampler_rng, eta = eta{{sample_options}})
+{% if flags.hires %}
+{% include "image_hires" %}
+{% endif %}
+    image = vae_decode(vae, {{to_vae}}(vae, {{result_latent}}){{vae_run_options}})
+    return {image = image, latent = {{result_latent}}}
+}

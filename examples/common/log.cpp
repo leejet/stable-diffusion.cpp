@@ -4,6 +4,7 @@
 
 sd_log_level_t log_level = SD_LOG_INFO;
 bool log_color           = false;
+FILE* log_stream         = nullptr;
 
 std::string sd_basename(const std::string& path) {
     size_t pos = path.find_last_of('/');
@@ -79,10 +80,10 @@ bool parse_log_level(const std::string& name, sd_log_level_t& level) {
     return false;
 }
 
-void log_print(enum sd_log_level_t level, const char* log, sd_log_level_t min_level, bool color) {
+void log_print(enum sd_log_level_t level, const char* log, sd_log_level_t min_level, bool color, FILE* stream) {
     int tag_color;
     const char* level_str;
-    FILE* out_stream = (level == SD_LOG_ERROR) ? stderr : stdout;
+    FILE* out_stream = stream ? stream : ((level == SD_LOG_ERROR) ? stderr : stdout);
 
     if (!log || level < min_level) {
         return;
@@ -91,34 +92,34 @@ void log_print(enum sd_log_level_t level, const char* log, sd_log_level_t min_le
     switch (level) {
         case SD_LOG_DEBUG:
             tag_color = 37;
-            level_str = "DEBUG";
+            level_str = "D";
             break;
         case SD_LOG_VERBOSE:
             tag_color = 37;
-            level_str = "VERBOSE";
+            level_str = "V";
             break;
         case SD_LOG_INFO:
             tag_color = 34;
-            level_str = "INFO";
+            level_str = "I";
             break;
         case SD_LOG_WARN:
             tag_color = 35;
-            level_str = "WARN";
+            level_str = "W";
             break;
         case SD_LOG_ERROR:
             tag_color = 31;
-            level_str = "ERROR";
+            level_str = "E";
             break;
         default:
             tag_color = 33;
-            level_str = "?????";
+            level_str = "?";
             break;
     }
 
     if (color) {
-        fprintf(out_stream, "\033[%d;1m[%-7s]\033[0m ", tag_color, level_str);
+        fprintf(out_stream, "\033[%d;1m[%s]\033[0m ", tag_color, level_str);
     } else {
-        fprintf(out_stream, "[%-7s] ", level_str);
+        fprintf(out_stream, "[%s] ", level_str);
     }
     fflush(out_stream);
     print_utf8(out_stream, log);
@@ -131,18 +132,15 @@ void example_log_printf(sd_log_level_t level, const char* file, int line, const 
     va_list args;
     va_start(args, format);
 
-    static char log_buffer[LOG_BUFFER_SIZE + 1];
-    int written = snprintf(log_buffer, LOG_BUFFER_SIZE, "%s:%-4d - ", sd_basename(file).c_str(), line);
-
-    if (written >= 0 && written < static_cast<int>(LOG_BUFFER_SIZE)) {
-        vsnprintf(log_buffer + written, LOG_BUFFER_SIZE - written, format, args);
-    }
-    size_t len = strlen(log_buffer);
-    if (len == 0 || log_buffer[len - 1] != '\n') {
-        strncat(log_buffer, "\n", LOG_BUFFER_SIZE - len);
-    }
-
-    log_print(level, log_buffer, log_level, log_color);
-
+    char log_buffer[LOG_BUFFER_SIZE + 1] = {};
+    vsnprintf(log_buffer, sizeof(log_buffer), format, args);
     va_end(args);
+
+    std::string message = log_buffer;
+    while (!message.empty() && (message.back() == '\n' || message.back() == '\r')) {
+        message.pop_back();
+    }
+    message += " --- " + sd_basename(file) + ":" + std::to_string(line) + '\n';
+
+    log_print(level, message.c_str(), log_level, log_color, log_stream);
 }

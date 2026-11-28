@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "id": "chroma",
+  "name": "Chroma",
+  "model_url": "https://huggingface.co/lodestones/Chroma1-HD",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "t5xxl",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "cfg_scale": 3,
+    "steps": 20,
+    "width": 1024,
+    "height": 1024
+  },
+  "features": [
+    "flow_shift",
+    "slg"
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "id": "flux1-dev",
+  "name": "FLUX.1 dev",
+  "description": "Supports FLUX.1 dev and compatible layer-count variants such as FLUX.1 Lite. Select the transformer with matching CLIP-L, T5XXL and FLUX.1 VAE.",
+  "model_url": "https://huggingface.co/black-forest-labs/FLUX.1-dev",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "clip_l",
+      "required": true
+    },
+    {
+      "id": "t5xxl",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "cfg_scale": 1,
+    "steps": 20,
+    "width": 1024,
+    "height": 1024,
+    "distilled_guidance": 3.5
+  },
+  "features": [
+    "clip_skip",
+    "distilled_guidance",
+    "flow_shift",
+    "slg"
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "id": "llada-image",
+  "name": "LLaDA Image (base)",
+  "size_multiple": 16,
+  "description": "Use matching base transformer, text encoder and connectors; do not mix them with Turbo components. Editing needs connectors with SigVQ and 1024x1024 output.",
+  "model_url": "https://huggingface.co/inclusionAI/LLaDA-Image",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "LLaDA-Image Base Text Encoder"
+    },
+    {
+      "id": "tokenizer",
+      "required": true,
+      "label": "LLaDA tokenizer.json"
+    },
+    {
+      "id": "embeddings_connectors",
+      "required": true,
+      "label": "LLaDA Base Connectors"
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "scheduler": "llada_image",
+    "cfg_scale": 5,
+    "steps": 20,
+    "width": 1024,
+    "height": 1024
+  },
+  "features": [
+    "ref_images"
+  ]
+}

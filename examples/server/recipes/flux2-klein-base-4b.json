@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "id": "flux2-klein-base-4b",
+  "name": "FLUX.2 Klein Base 4B",
+  "size_multiple": 16,
+  "description": "Supports text-to-image and reference-image editing.",
+  "model_url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Qwen 3 4B Text Encoder"
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "cfg_scale": 4,
+    "steps": 20,
+    "width": 1024,
+    "height": 1024
+  },
+  "features": [
+    "flow_shift",
+    "img_cfg",
+    "ref_images",
+    "slg"
+  ]
+}

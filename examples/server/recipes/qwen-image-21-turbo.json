@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "id": "qwen-image-21-turbo",
+  "name": "Qwen Image 2.1 Turbo",
+  "size_multiple": 32,
+  "description": "Use the standalone Turbo diffusion weights for generation and editing with the fixed 8-step schedule. Select the Qwen Image 2.1 VAE or TAEQI2.1, and supply a vision projector when needed.",
+  "model_url": "https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Qwen 3 VL 8B Text Encoder"
+    },
+    {
+      "id": "llm_vision",
+      "required": false,
+      "label": "Vision projector (required for separate GGUF text encoders)"
+    },
+    {
+      "id": "vae",
+      "required": false,
+      "label": "Qwen Image 2.1 VAE"
+    },
+    {
+      "id": "tae",
+      "required": false,
+      "label": "TAEQI2.1"
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "cfg_scale": 1,
+    "steps": 8,
+    "width": 1024,
+    "height": 1024,
+    "custom_sigmas": [
+      1.0,
+      0.978453,
+      0.95418,
+      0.926626,
+      0.89508,
+      0.845148,
+      0.704534,
+      0.414568,
+      0.0
+    ]
+  },
+  "features": [
+    "ref_images"
+  ]
+}

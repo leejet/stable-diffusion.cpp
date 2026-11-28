@@ -84,12 +84,17 @@ class TinyEncoder : public UnaryBlock {
     int channels    = 64;
     int z_channels  = 4;
     int num_blocks  = 3;
+    bool f16;
 
 public:
-    TinyEncoder(int z_channels = 4, bool use_midblock_gn = false)
-        : z_channels(z_channels) {
-        int index                       = 0;
+    TinyEncoder(int z_channels = 4, bool use_midblock_gn = false, bool f16 = false)
+        : z_channels(z_channels), f16(f16) {
+        in_channels                     = f16 ? 16 : 3;
+        int index                       = f16 ? 1 : 0;
         blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(in_channels, channels, {3, 3}, {1, 1}, {1, 1}));
+        if (f16) {
+            index++;  // nn.ReLU()
+        }
         blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels));
 
         blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {2, 2}, {1, 1}, {1, 1}, false));
@@ -97,12 +102,14 @@ public:
             blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels));
         }
 
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {2, 2}, {1, 1}, {1, 1}, false));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, f16 ? channels * 2 : channels, {3, 3}, {2, 2}, {1, 1}, {1, 1}, false));
+        channels *= f16 ? 2 : 1;
         for (int i = 0; i < num_blocks; i++) {
             blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels));
         }
 
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {2, 2}, {1, 1}, {1, 1}, false));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, f16 ? channels * 2 : channels, {3, 3}, {2, 2}, {1, 1}, {1, 1}, false));
+        channels *= f16 ? 2 : 1;
         for (int i = 0; i < num_blocks; i++) {
             blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels, use_midblock_gn));
         }
@@ -114,7 +121,11 @@ public:
         // x: [n, in_channels, h, w]
         // return: [n, z_channels, h/8, w/8]
 
-        for (int i = 0; i < num_blocks * 3 + 6; i++) {
+        for (int i = f16 ? 1 : 0; i < num_blocks * 3 + 6 + (f16 ? 2 : 0); i++) {
+            if (f16 && i == 2) {
+                x = ggml_relu_inplace(ctx->ggml_ctx, x);
+                continue;
+            }
             auto block = std::dynamic_pointer_cast<UnaryBlock>(blocks[std::to_string(i)]);
 
             x = block->forward(ctx, x);
@@ -131,9 +142,11 @@ class TinyDecoder : public UnaryBlock {
     int num_blocks   = 3;
 
 public:
-    TinyDecoder(int z_channels = 4, bool use_midblock_gn = false)
+    TinyDecoder(int z_channels = 4, bool use_midblock_gn = false, bool f16 = false)
         : z_channels(z_channels) {
-        int index = 0;
+        channels     = f16 ? 256 : 64;
+        out_channels = f16 ? 16 : 3;
+        int index    = 0;
 
         blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(z_channels, channels, {3, 3}, {1, 1}, {1, 1}));
         index++;  // nn.ReLU()
@@ -142,13 +155,15 @@ public:
             blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels, use_midblock_gn));
         }
         index++;  // nn.Upsample()
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, false));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, f16 ? channels / 2 : channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, false));
+        channels /= f16 ? 2 : 1;
 
         for (int i = 0; i < num_blocks; i++) {
             blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels));
         }
         index++;  // nn.Upsample()
-        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, false));
+        blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new Conv2d(channels, f16 ? channels / 2 : channels, {3, 3}, {1, 1}, {1, 1}, {1, 1}, false));
+        channels /= f16 ? 2 : 1;
 
         for (int i = 0; i < num_blocks; i++) {
             blocks[std::to_string(index++)] = std::shared_ptr<GGMLBlock>(new TAEBlock(channels, channels));
@@ -164,9 +179,9 @@ public:
         // z: [n, z_channels, h, w]
         // return: [n, out_channels, h*8, w*8]
 
-        auto h = ggml_ext_scale(ctx->ggml_ctx, z, 1.0f / 3.0f);
+        auto h = ggml_ext_scale(ctx, z, 1.0f / 3.0f);
         h      = ggml_tanh_inplace(ctx->ggml_ctx, h);
-        h      = ggml_ext_scale(ctx->ggml_ctx, h, 3.0f);
+        h      = ggml_ext_scale(ctx, h, 3.0f);
 
         for (int i = 0; i < num_blocks * 3 + 10; i++) {
             if (blocks.find(std::to_string(i)) == blocks.end()) {
@@ -306,11 +321,8 @@ public:
     }
 };
 
-ggml_tensor*
-patchify(ggml_context* ctx,
-         ggml_tensor* x,
-         int64_t patch_size,
-         int64_t b = 1) {
+inline ggml_tensor* patchify(GGMLRunnerContext* runner_ctx, ggml_tensor* x, int64_t patch_size, int64_t b = 1) {
+    auto ctx = runner_ctx->ggml_ctx;
     // x: [f, b*c, h*q, w*r]
     // return: [f, b*c*r*q, h, w]
     if (patch_size == 1) {
@@ -327,19 +339,17 @@ patchify(ggml_context* ctx,
     int64_t w = W / r;
     int64_t h = H / q;
 
-    x = ggml_reshape_4d(ctx, x, W, q, h, C * f);                         // [W, q, h, C*f]
-    x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));  // [W, h, q, C*f]
-    x = ggml_reshape_4d(ctx, x, r, w, h, q * C * f);                     // [r, w, h, q*C*f]
-    x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 1, 2, 0, 3));  // [w, h, r, q*C*f]
-    x = ggml_reshape_4d(ctx, x, w, h, r * q * C, f);                     // [f, b*c*r*q, h, w]
+    x = ggml_reshape_4d(ctx, x, W, q, h, C * f);                                       // [W, q, h, C*f]
+    x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 0, 2, 1, 3));  // [W, h, q, C*f]
+    x = ggml_reshape_4d(ctx, x, r, w, h, q * C * f);                                   // [r, w, h, q*C*f]
+    x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 1, 2, 0, 3));  // [w, h, r, q*C*f]
+    x = ggml_reshape_4d(ctx, x, w, h, r * q * C, f);                                   // [f, b*c*r*q, h, w]
 
     return x;
 }
 
-ggml_tensor* unpatchify(ggml_context* ctx,
-                        ggml_tensor* x,
-                        int64_t patch_size,
-                        int64_t b = 1) {
+inline ggml_tensor* unpatchify(GGMLRunnerContext* runner_ctx, ggml_tensor* x, int64_t patch_size, int64_t b = 1) {
+    auto ctx = runner_ctx->ggml_ctx;
     // x: [f, b*c*r*q, h, w]
     // return: [f, b*c, h*q, w*r]
     if (patch_size == 1) {
@@ -352,10 +362,10 @@ ggml_tensor* unpatchify(ggml_context* ctx,
     int64_t h = x->ne[1];
     int64_t w = x->ne[0];
 
-    x = ggml_reshape_4d(ctx, x, w, h, r, q * c * b * f);                 // [q*c*b*f, r, h, w]
-    x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 2, 0, 1, 3));  // [r, w, h, q*c*b*f]
-    x = ggml_reshape_4d(ctx, x, r * w, h, q, c * b * f);                 // [c*b*f, q, h, r*w]
-    x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));  // [r*w, q, h, c*b*f]
+    x = ggml_reshape_4d(ctx, x, w, h, r, q * c * b * f);                               // [q*c*b*f, r, h, w]
+    x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 2, 0, 1, 3));  // [r, w, h, q*c*b*f]
+    x = ggml_reshape_4d(ctx, x, r * w, h, q, c * b * f);                               // [c*b*f, q, h, r*w]
+    x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 0, 2, 1, 3));  // [r*w, q, h, c*b*f]
     x = ggml_reshape_4d(ctx, x, r * w, q * h, c * b, f);
 
     return x;
@@ -397,7 +407,7 @@ public:
         auto first_conv = std::dynamic_pointer_cast<Conv2d>(blocks["0"]);
 
         if (patch_size > 1) {
-            z = patchify(ctx->ggml_ctx, z, patch_size, 1);
+            z = patchify(ctx, z, patch_size, 1);
         }
 
         auto h = first_conv->forward(ctx, z);
@@ -412,7 +422,7 @@ public:
             h = conv->forward(ctx, h);
             for (int j = 0; j < num_blocks; j++) {
                 auto block = std::dynamic_pointer_cast<MemBlock>(blocks[std::to_string(index++)]);
-                auto mem   = ggml_ext_pad_ext(ctx->ggml_ctx, ctx->backend, h, 0, 0, 0, 0, 0, 0, 1, 0);
+                auto mem   = ggml_ext_pad_ext(ctx, h, 0, 0, 0, 0, 0, 0, 1, 0);
                 mem        = ggml_view_4d(ctx->ggml_ctx, mem, h->ne[0], h->ne[1], h->ne[2], h->ne[3], h->nb[1], h->nb[2], h->nb[3], 0);
                 h          = block->forward(ctx, h, mem);
             }
@@ -472,9 +482,9 @@ public:
         auto first_conv = std::dynamic_pointer_cast<Conv2d>(blocks["1"]);
 
         // Clamp()
-        auto h = ggml_ext_scale(ctx->ggml_ctx,
+        auto h = ggml_ext_scale(ctx,
                                 ggml_tanh_inplace(ctx->ggml_ctx,
-                                                  ggml_ext_scale(ctx->ggml_ctx, z, 1.0f / 3.0f)),
+                                                  ggml_ext_scale(ctx, z, 1.0f / 3.0f)),
                                 3.0f,
                                 true);
 
@@ -483,7 +493,7 @@ public:
         int index = 3;
         for (int i = 0; i < num_layers; i++) {
             for (int j = 0; j < num_blocks; j++) {
-                auto mem = ggml_ext_pad_ext(ctx->ggml_ctx, ctx->backend, h, 0, 0, 0, 0, 0, 0, 1, 0);
+                auto mem = ggml_ext_pad_ext(ctx, h, 0, 0, 0, 0, 0, 0, 1, 0);
                 mem      = ggml_view_4d(ctx->ggml_ctx, mem, h->ne[0], h->ne[1], h->ne[2], h->ne[3], h->nb[1], h->nb[2], h->nb[3], 0);
                 if (is_wide) {
                     auto block = std::dynamic_pointer_cast<WideMemBlock>(blocks[std::to_string(index++)]);
@@ -506,7 +516,7 @@ public:
         auto last_conv = std::dynamic_pointer_cast<Conv2d>(blocks[std::to_string(++index)]);
         h              = last_conv->forward(ctx, h);
         if (patch_size > 1) {
-            h = unpatchify(ctx->ggml_ctx, h, patch_size, 1);
+            h = unpatchify(ctx, h, patch_size, 1);
         }
         // shape(W, H, 3, (t_upscale - 1) + T) => shape(W, H, 3, T)
         h = ggml_view_4d(ctx->ggml_ctx, h, h->ne[0], h->ne[1], h->ne[2], h->ne[3] - (t_upscale - 1), h->nb[1], h->nb[2], h->nb[3], (t_upscale - 1) * h->nb[3]);
@@ -564,7 +574,7 @@ public:
             int64_t chunk_frames = 5 * decoder->t_upscale;
             int64_t pad          = (chunk_frames - (num_frames % chunk_frames)) % chunk_frames;
 
-            result = ggml_ext_pad_ext(ctx->ggml_ctx, ctx->backend, result, 0, 0, 0, 0, 0, 0, 0, static_cast<int>(pad), false, false);
+            result = ggml_ext_pad_ext(ctx, result, 0, 0, 0, 0, 0, 0, 0, static_cast<int>(pad), false, false);
 
             int64_t num_chunks                  = (num_frames + pad) / chunk_frames;
             auto to_trim                        = decoder->t_upscale - 1;
@@ -576,7 +586,7 @@ public:
                                           i * chunk_frames * result->nb[3]);
                 to_concat.push_back(chunk);
             }
-            result = ggml_ext_vec_concat(ctx->ggml_ctx, to_concat, 3);
+            result = ggml_ext_vec_concat(ctx, to_concat, 3);
             result = ggml_view_4d(ctx->ggml_ctx, result,
                                   result->ne[0], result->ne[1], result->ne[2],
                                   result->ne[3] - decoder->t_upscale * 3,
@@ -630,7 +640,7 @@ public:
 
                 to_concat.push_back(chunk_padded);
             }
-            ggml_tensor* x_in = ggml_ext_vec_concat(ctx->ggml_ctx, to_concat, 3);
+            ggml_tensor* x_in = ggml_ext_vec_concat(ctx, to_concat, 3);
             out               = encoder->forward(ctx, x_in);
         } else {
             std::vector<ggml_tensor*> to_concat = {};
@@ -647,7 +657,7 @@ public:
 
                 to_concat.push_back(chunk_out);
             }
-            out = ggml_ext_vec_concat(ctx->ggml_ctx, to_concat, 3);
+            out = ggml_ext_vec_concat(ctx, to_concat, 3);
         }
 
         // Return x[:, :-3] - drop the last 3 elements in the T dimension
@@ -691,6 +701,7 @@ class TAESD : public GGMLBlock {
 protected:
     bool decode_only;
     bool taef2 = false;
+    bool f16   = false;
 
 public:
     int z_channels = 4;
@@ -708,26 +719,35 @@ public:
             z_channels      = 32;
             use_midblock_gn = true;
         }
-        blocks["decoder.layers"] = std::shared_ptr<GGMLBlock>(new TinyDecoder(z_channels, use_midblock_gn));
+        f16 = version == VERSION_QWEN_IMAGE_2_1;
+        if (f16) {
+            z_channels = 64;
+        }
+        blocks["decoder.layers"] = std::shared_ptr<GGMLBlock>(new TinyDecoder(z_channels, use_midblock_gn, f16));
 
         if (!decode_only) {
-            blocks["encoder.layers"] = std::shared_ptr<GGMLBlock>(new TinyEncoder(z_channels, use_midblock_gn));
+            blocks["encoder.layers"] = std::shared_ptr<GGMLBlock>(new TinyEncoder(z_channels, use_midblock_gn, f16));
         }
     }
 
     ggml_tensor* decode(GGMLRunnerContext* ctx, ggml_tensor* z) {
         auto decoder = std::dynamic_pointer_cast<TinyDecoder>(blocks["decoder.layers"]);
         if (taef2) {
-            z = unpatchify(ctx->ggml_ctx, z, 2);
+            z = unpatchify(ctx, z, 2);
         }
-        return decoder->forward(ctx, z);
+        auto x = decoder->forward(ctx, z);
+        return f16 ? unpatchify(ctx, x, 2) : x;
     }
 
     ggml_tensor* encode(GGMLRunnerContext* ctx, ggml_tensor* x) {
+        if (f16) {
+            GGML_ASSERT(x->ne[0] % 2 == 0 && x->ne[1] % 2 == 0);
+            x = patchify(ctx, x, 2);
+        }
         auto encoder = std::dynamic_pointer_cast<TinyEncoder>(blocks["encoder.layers"]);
         auto z       = encoder->forward(ctx, x);
         if (taef2) {
-            z = patchify(ctx->ggml_ctx, z, 2);
+            z = patchify(ctx, z, 2);
         }
         return z;
     }
@@ -758,7 +778,7 @@ struct TinyImageAutoEncoder : public VAE {
         taesd.get_param_tensors(tensors, weight_prefix);
     }
 
-    sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng) override {
+    sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng, VAEPosterior, bool) override {
         SD_UNUSED(rng);
         return vae_output;
     }
@@ -842,7 +862,7 @@ struct TinyVideoAutoEncoder : public VAE {
         taehv.get_param_tensors(tensors, weight_prefix);
     }
 
-    sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng) override {
+    sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng, VAEPosterior, bool) override {
         SD_UNUSED(rng);
         return vae_output;
     }

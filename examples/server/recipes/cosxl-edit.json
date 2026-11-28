@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "id": "cosxl-edit",
+  "name": "CosXL Edit",
+  "size_multiple": 64,
+  "description": "Supply the image to edit as a reference image.",
+  "model_url": "https://huggingface.co/stabilityai/cosxl",
+  "slots": [
+    {
+      "id": "model",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "defaults": {
+    "img_cfg_scale": 1.5,
+    "sampling_method": "euler_a",
+    "scheduler": "karras"
+  },
+  "features": [
+    "cache_unet",
+    "clip_skip",
+    "img_cfg",
+    "ref_images",
+    "shifted_timestep"
+  ],
+  "disabled_features": [
+    "cache_dit"
+  ]
+}

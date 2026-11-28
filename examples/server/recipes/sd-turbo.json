@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "id": "sd-turbo",
+  "name": "SD Turbo",
+  "size_multiple": 64,
+  "description": "Select a single-file SD-Turbo checkpoint. Uses one step with CFG disabled (scale 1 in sd.cpp); use more steps for partial image-to-image denoising.",
+  "model_url": "https://huggingface.co/stabilityai/sd-turbo",
+  "slots": [
+    {
+      "id": "model",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "scheduler": "discrete",
+    "cfg_scale": 1,
+    "steps": 1,
+    "width": 512,
+    "height": 512
+  },
+  "features": [
+    "cache_unet",
+    "clip_skip"
+  ],
+  "disabled_features": [
+    "cache_dit"
+  ]
+}

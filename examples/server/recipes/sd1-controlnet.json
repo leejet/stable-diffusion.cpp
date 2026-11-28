@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "id": "sd1-controlnet",
+  "name": "SD 1.5 ControlNet",
+  "size_multiple": 64,
+  "description": "Supply a control image; input image and mask are optional for image-to-image or inpainting.",
+  "model_url": "https://huggingface.co/lllyasviel/control_v11p_sd15_canny",
+  "slots": [
+    {
+      "id": "model",
+      "required": true
+    },
+    {
+      "id": "control_net",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "defaults": {
+    "cfg_scale": 7.5,
+    "steps": 20,
+    "width": 512,
+    "height": 512
+  },
+  "features": [
+    "cache_unet",
+    "clip_skip"
+  ],
+  "disabled_features": [
+    "cache_dit"
+  ]
+}

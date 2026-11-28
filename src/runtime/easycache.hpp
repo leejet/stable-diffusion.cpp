@@ -68,6 +68,26 @@ struct EasyCacheState {
         current_step_index               = -1;
     }
 
+    void invalidate_condition(const void* condition) {
+        cache_diffs.erase(condition);
+        if (anchor_condition != condition)
+            return;
+        anchor_condition  = nullptr;
+        initial_step      = true;
+        skip_current_step = false;
+        prev_input.clear();
+        prev_output.clear();
+        output_prev_norm                 = 0.0f;
+        has_prev_input                   = false;
+        has_prev_output                  = false;
+        has_output_prev_norm             = false;
+        has_relative_transformation_rate = false;
+        relative_transformation_rate     = 0.0f;
+        cumulative_change_rate           = 0.0f;
+        last_input_change                = 0.0f;
+        has_last_input_change            = false;
+    }
+
     void init(const EasyCacheConfig& cfg, Denoiser* d) {
         config      = cfg;
         denoiser    = d;

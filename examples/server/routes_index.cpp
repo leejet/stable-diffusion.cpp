@@ -1,5 +1,6 @@
 #include "routes.h"
 
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 
@@ -7,7 +8,7 @@ void register_index_endpoints(httplib::Server& svr, const SDSvrParams& svr_param
     const std::string serve_html_path = svr_params.serve_html_path;
     svr.Get("/", [serve_html_path, index_html](const httplib::Request&, httplib::Response& res) {
         if (!serve_html_path.empty()) {
-            std::ifstream file(serve_html_path);
+            std::ifstream file(std::filesystem::u8path(serve_html_path));
             if (file) {
                 std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
                 res.set_content(content, "text/html");

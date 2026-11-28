@@ -1,9 +1,7 @@
 #include "model/upscaler/kandinsky_imagesr.hpp"
 
-#include <fstream>
 #include "json.hpp"
 #include "model/vae/auto_encoder_kl.hpp"
-#include "model_io/safetensors_io.h"
 #include "model_loader.h"
 #include "runtime/tiling.h"
 
@@ -21,75 +19,33 @@ namespace KandinskyImageSR {
         throw std::runtime_error("missing baked timestep " + std::to_string(t));
     }
 
-    struct Bundle {
-        std::string transformer_path;
-        std::string vae_path;
-        std::vector<int> axes;
-        int layers;
-        int64_t rows;
-        int row_x2, row_x4;
-    };
-
-    static Bundle read_bundle(const std::string& path) {
-        std::ifstream input(std::filesystem::u8path(path) / "transformer" / "config.json");
-        const auto json  = nlohmann::json::parse(input);
-        const auto steps = json.at("baked_timesteps").get<std::vector<float>>();
-        const auto axes  = json.at("axes_dims").get<std::vector<int>>();
-        if (json.at("_class_name") != "KandinskyImageSRBakedTransformer3DModel" ||
-            json.at("attention_type") != "regular" || json.at("visual_cond") != false ||
-            json.at("patch_size") != nlohmann::json::array({1, 2, 2}) || json.at("baked_latent_size") != tile_side / 8 ||
-            json.at("in_visual_dim") != 16 || json.at("out_visual_dim") != 16 ||
-            axes != std::vector<int>{32, 48, 48} || json.at("num_visual_blocks") != 50) {
-            throw std::runtime_error("unsupported ImageSR transformer configuration");
-        }
-        auto transformer_path = path_join(path, "transformer/diffusion_pytorch_model.safetensors");
-        if (file_exists(transformer_path + ".index.json")) {
-            transformer_path += ".index.json";
-        }
-        return {transformer_path, path_join(path, "vae/diffusion_pytorch_model.safetensors"), axes,
-                json.at("num_visual_blocks").get<int>(), static_cast<int64_t>(steps.size()),
-                timestep_row(steps, timestep_x2), timestep_row(steps, timestep_x4)};
-    }
-
-    bool is_bundle(const std::string& path) {
+    std::unique_ptr<Upscaler> Upscaler::create(const ModelLoader& loader, ggml_backend_t backend, std::shared_ptr<RunnerWeightManager> manager, bool direct) {
         try {
-            const auto bundle = read_bundle(path);
-            if (!is_safetensors_file(bundle.vae_path)) {
-                return false;
-            }
-            if (ends_with(bundle.transformer_path, ".index.json")) {
-                std::vector<std::string> shards;
-                return read_safetensors_index_file(bundle.transformer_path, shards) &&
-                       std::all_of(shards.begin(), shards.end(), is_safetensors_file);
-            }
-            return is_safetensors_file(bundle.transformer_path);
-        } catch (const std::exception&) {
-            return false;
-        }
-    }
-
-    std::unique_ptr<Upscaler> Upscaler::load(const std::string& path, ModelLoader& loader, ggml_backend_t backend, std::shared_ptr<RunnerWeightManager> manager, bool direct) {
-        try {
-            const auto bundle = read_bundle(path);
-            if (!loader.init_from_file_and_convert_name(bundle.vae_path, "vae.", VERSION_FLUX) ||
-                !loader.add_file(bundle.transformer_path)) {
-                throw std::runtime_error("could not load the transformer or VAE weights");
+            const auto json  = nlohmann::json::parse(loader.get_metadata().at("kandinsky_imagesr_config"));
+            const auto steps = json.at("baked_timesteps").get<std::vector<float>>();
+            const auto axes  = json.at("axes_dims").get<std::vector<int>>();
+            if (json.at("_class_name") != "KandinskyImageSRBakedTransformer3DModel" ||
+                json.at("attention_type") != "regular" || json.at("visual_cond") != false ||
+                json.at("patch_size") != nlohmann::json::array({1, 2, 2}) || json.at("baked_latent_size") != tile_side / 8 ||
+                json.at("in_visual_dim") != 16 || json.at("out_visual_dim") != 16 ||
+                axes != std::vector<int>{32, 48, 48} || json.at("num_visual_blocks") != 50) {
+                throw std::runtime_error("unsupported ImageSR transformer configuration");
             }
             const auto& tensors = loader.get_tensor_storage_map();
-            const auto config   = KandinskyImageSRConfig::detect_from_weights(tensors, bundle.layers, bundle.axes);
-            if (config.dim != 2560 || config.ff_dim != 10240 || config.time_dim != 512 || config.rows != bundle.rows) {
+            const auto config   = KandinskyImageSRConfig::detect_from_weights(tensors, json.at("num_visual_blocks").get<int>(), axes);
+            if (config.dim != 2560 || config.ff_dim != 10240 || config.time_dim != 512 || config.rows != static_cast<int64_t>(steps.size())) {
                 throw std::runtime_error("incompatible transformer weight dimensions");
             }
             auto upscaler         = std::make_unique<Upscaler>();
-            upscaler->row_x2      = bundle.row_x2;
-            upscaler->row_x4      = bundle.row_x4;
+            upscaler->row_x2      = timestep_row(steps, timestep_x2);
+            upscaler->row_x4      = timestep_row(steps, timestep_x4);
             upscaler->transformer = std::make_unique<Runner>(backend, tensors, config, tile_side / 8, manager);
             upscaler->vae         = std::make_shared<AutoEncoderKL>(backend, tensors, "first_stage_model", false, false, VERSION_FLUX, manager);
             upscaler->vae->set_conv2d_direct_enabled(direct);
             upscaler->vae->set_flash_attention_enabled(true);
             return upscaler;
         } catch (const std::exception& e) {
-            LOG_ERROR("cannot load Kandinsky ImageSR bundle '%s': %s", path.c_str(), e.what());
+            LOG_ERROR("cannot load Kandinsky ImageSR bundle: %s", e.what());
             return nullptr;
         }
     }
@@ -97,11 +53,6 @@ namespace KandinskyImageSR {
     void Upscaler::get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) {
         transformer->model.get_param_tensors(tensors);
         vae->get_param_tensors(tensors);
-    }
-
-    void Upscaler::set_max_graph_vram_bytes(size_t bytes) {
-        transformer->set_max_graph_vram_bytes(bytes);
-        vae->set_max_graph_vram_bytes(bytes);
     }
 
     static std::vector<int64_t> tile_starts(int64_t length, int side) {

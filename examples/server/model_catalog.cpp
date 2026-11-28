@@ -1,0 +1,838 @@
+#include "model_catalog.h"
+
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <fstream>
+#include <iomanip>
+#include <set>
+#include <sstream>
+#include <stdexcept>
+#include <vector>
+
+#include "common/log.h"
+#include "recipes_builtin.h"
+
+namespace fs = std::filesystem;
+
+struct ModelSlot {
+    const char* id;
+    const char* label;
+    std::vector<std::string> categories;
+    std::string SDContextParams::* field;
+};
+
+static const ModelSlot k_model_slots[] = {
+    {"model", "Checkpoint", {"checkpoints"}, &SDContextParams::model_path},
+    {"diffusion_model", "Diffusion model", {"diffusion_models"}, &SDContextParams::diffusion_model_path},
+    {"high_noise_diffusion_model", "High-noise diffusion model", {"diffusion_models"}, &SDContextParams::high_noise_diffusion_model_path},
+    {"uncond_diffusion_model", "Unconditional diffusion model", {"diffusion_models"}, &SDContextParams::uncond_diffusion_model_path},
+    {"clip_l", "CLIP-L", {"text_encoders"}, &SDContextParams::clip_l_path},
+    {"clip_g", "CLIP-G", {"text_encoders"}, &SDContextParams::clip_g_path},
+    {"clip_vision", "CLIP Vision", {"clip_vision"}, &SDContextParams::clip_vision_path},
+    {"t5xxl", "T5", {"text_encoders"}, &SDContextParams::t5xxl_path},
+    {"llm", "LLM Text Encoder", {"text_encoders"}, &SDContextParams::llm_path},
+    {"llm_vision", "LLM Vision Encoder", {"text_encoders", "clip_vision"}, &SDContextParams::llm_vision_path},
+    {"tokenizer", "Tokenizer", {"tokenizers"}, &SDContextParams::tokenizer},
+    {"vae", "VAE", {"vae"}, &SDContextParams::vae_path},
+    {"audio_vae", "Audio VAE", {"vae"}, &SDContextParams::audio_vae_path},
+    {"audio_encoder", "Audio Encoder", {"text_encoders"}, &SDContextParams::audio_encoder_path},
+    {"embeddings_connectors", "Embeddings Connectors", {"text_encoders"}, &SDContextParams::embeddings_connectors_path},
+    {"tae", "TAE", {"vae", "vae_approx"}, &SDContextParams::taesd_path},
+    {"taesd", "TAE", {"vae_approx", "vae"}, &SDContextParams::taesd_path},
+    {"control_net", "ControlNet", {"controlnet"}, &SDContextParams::control_net_path},
+    {"ip_adapter", "IP-Adapter", {"ipadapter"}, &SDContextParams::ip_adapter_path},
+    {"motion_module", "Motion Module", {"motion_modules"}, &SDContextParams::motion_module_path},
+    {"photo_maker", "PhotoMaker", {"photomaker"}, &SDContextParams::photo_maker_path},
+    {"pulid_weights", "PuLID", {"pulid"}, &SDContextParams::pulid_weights_path},
+};
+
+static const ModelSlot* find_model_slot(const std::string& id) {
+    for (const auto& slot : k_model_slots) {
+        if (id == slot.id) {
+            return &slot;
+        }
+    }
+    return nullptr;
+}
+
+static bool matches_model_category(const ModelSlot& slot, const std::string& category) {
+    return std::find(slot.categories.begin(), slot.categories.end(), category) != slot.categories.end();
+}
+
+static void clear_model_paths(SDContextParams& params) {
+    for (const auto& slot : k_model_slots) {
+        (params.*slot.field).clear();
+    }
+}
+
+std::string model_path_key(const fs::path& path) {
+#ifdef _WIN32
+    const auto value = path.generic_wstring();
+    const int length = LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_LOWERCASE, value.data(),
+                                     static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr, 0);
+    if (length > 0) {
+        std::wstring folded(length, L'\0');
+        LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_LOWERCASE, value.data(),
+                      static_cast<int>(value.size()), &folded[0], length, nullptr, nullptr, 0);
+        return fs::path(folded).generic_u8string();
+    }
+#endif
+    return path.generic_u8string();
+}
+
+bool model_path_inside(const fs::path& root, const fs::path& path) {
+    auto parent = root.begin();
+    auto child  = path.begin();
+    for (; parent != root.end(); ++parent, ++child) {
+        if (child == path.end() || model_path_key(*parent) != model_path_key(*child)) {
+            return false;
+        }
+    }
+    return child != path.end();
+}
+
+ModelRoot make_model_root(const fs::path& path, bool primary) {
+    ModelRoot root;
+    const auto absolute = fs::absolute(path);
+    std::error_code ec;
+    root.path = fs::weakly_canonical(absolute, ec);
+    if (ec)
+        root.path = absolute.lexically_normal();
+    root.primary  = primary;
+    uint64_t hash = 14695981039346656037ULL;
+    for (unsigned char c : model_path_key(root.path)) {
+        hash ^= c;
+        hash *= 1099511628211ULL;
+    }
+    std::ostringstream id;
+    id << '@' << std::hex << std::setfill('0') << std::setw(16) << hash;
+    root.id    = id.str();
+    root.label = root.path.filename().u8string() + " [" + root.id.substr(1, 8) + "]";
+    return root;
+}
+
+std::vector<ModelRoot> get_model_roots(const SDSvrParams& params) {
+    const auto directories = params.model_dirs.empty() ? std::vector<std::string>{"models"} : params.model_dirs;
+    std::vector<ModelRoot> roots;
+    std::set<std::string> seen;
+    for (size_t i = 0; i < directories.size(); ++i) {
+        auto root = make_model_root(fs::u8path(directories[i]), i == 0);
+        if (seen.insert(model_path_key(root.path)).second)
+            roots.push_back(std::move(root));
+    }
+    return roots;
+}
+
+static void add_startup_index_shards(ServerFileAccess& policy, const fs::path& index_path) {
+    std::error_code error;
+    if (!fs::is_regular_file(index_path, error) || error)
+        return;
+    std::ifstream file(index_path);
+    const auto index  = json::parse(file, nullptr, false);
+    const auto shards = index.find("weight_map");
+    if (shards == index.end() || !shards->is_object())
+        return;
+    const auto root = fs::weakly_canonical(index_path.parent_path());
+    for (const auto& entry : *shards) {
+        if (!entry.is_string())
+            continue;
+        const auto path = fs::weakly_canonical((index_path.parent_path() / fs::u8path(entry.get_ref<const std::string&>())).lexically_normal(), error);
+        if (!error && model_path_inside(root, path))
+            policy.configured_files.insert(model_path_key(path));
+    }
+}
+
+void add_startup_model_sources(ServerFileAccess& policy, const SDContextParams& config) {
+    for (const auto& slot : k_model_slots) {
+        const auto& source = config.*slot.field;
+        if (source.empty() || slot.field == &SDContextParams::tokenizer)
+            continue;
+        const auto path     = fs::absolute(fs::u8path(source));
+        const auto resolved = fs::weakly_canonical(path);
+        policy.configured_files.insert(model_path_key(resolved));
+        if (fs::is_directory(resolved))
+            policy.model_bundles.push_back(resolved);
+        else if (path.extension() == ".json")
+            add_startup_index_shards(policy, path);
+    }
+
+    auto add_tokenizer = [&](const std::string& path) {
+        if (!path.empty())
+            policy.configured_files.insert(model_path_key(fs::weakly_canonical(fs::absolute(fs::u8path(path)))));
+    };
+    if (config.tokenizer.find('=') == std::string::npos) {
+        add_tokenizer(config.tokenizer);
+    } else {
+        std::istringstream assignments(config.tokenizer);
+        std::string assignment;
+        while (std::getline(assignments, assignment, ',')) {
+            const auto equal = assignment.find('=');
+            if (equal != std::string::npos)
+                add_tokenizer(assignment.substr(equal + 1));
+        }
+    }
+}
+
+std::vector<fs::path> model_category_directories(const ModelRoot& root, const std::string& category) {
+    std::vector<fs::path> directories;
+    if (!fs::exists(root.path))
+        return directories;
+    for (const auto& entry : fs::directory_iterator(root.path)) {
+        auto name = entry.path().filename().u8string();
+        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+        if (name == category || (category == "checkpoints" && name == "stable-diffusion") ||
+            (category == "loras" && name == "lora")) {
+            directories.push_back(entry.path());
+        }
+    }
+    std::sort(directories.begin(), directories.end(), [&](const fs::path& a, const fs::path& b) {
+        const bool a_standard = a.filename().u8string() == category;
+        const bool b_standard = b.filename().u8string() == category;
+        return a_standard != b_standard ? a_standard : a < b;
+    });
+    return directories;
+}
+
+static bool valid_identifier(const std::string& id) {
+    return !id.empty() && id.size() <= 128 &&
+           std::all_of(id.begin(), id.end(), [](unsigned char c) {
+               return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                      (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.';
+           });
+}
+
+static void check_keys(const json& object, const std::set<std::string>& keys) {
+    if (!object.is_object()) {
+        throw std::runtime_error("expected an object");
+    }
+    for (auto it = object.begin(); it != object.end(); ++it) {
+        if (!keys.count(it.key())) {
+            throw std::runtime_error("unknown field: " + it.key());
+        }
+    }
+}
+
+static void apply_recipe_defaults(const json& defaults, SDGenerationParams& params) {
+    check_keys(defaults, {"width", "height", "steps", "cfg_scale", "strength", "distilled_guidance", "sampling_method", "scheduler", "custom_sigmas",
+                          "video_frames", "fps", "flow_shift", "moe_boundary", "high_noise_steps", "high_noise_cfg_scale",
+                          "high_noise_flow_shift", "high_noise_sampling_method", "high_noise_scheduler", "img_cfg_scale", "shifted_timestep"});
+    for (const char* key : {"width", "height", "steps", "video_frames", "fps", "high_noise_steps", "shifted_timestep"}) {
+        if (!defaults.contains(key)) {
+            continue;
+        }
+        if (!defaults[key].is_number_integer()) {
+            throw std::runtime_error(std::string(key) + " must be an integer");
+        }
+        const int64_t value     = defaults[key].get<int64_t>();
+        const std::string field = key;
+        const bool dimension    = field == "width" || field == "height";
+        const int64_t maximum   = dimension || field == "video_frames" ? 4096 : field == "fps" ? 240
+                                                                                               : 1000;
+        const int64_t minimum   = dimension ? 64 : field == "shifted_timestep" ? 0
+                                                                               : 1;
+        if ((value < minimum || value > maximum) && !(field == "high_noise_steps" && value == -1)) {
+            throw std::runtime_error(std::string(key) + " is out of range");
+        }
+        if (std::string(key) == "width")
+            if (!params.width)
+                params.width = static_cast<int>(value);
+        if (std::string(key) == "height")
+            if (!params.height)
+                params.height = static_cast<int>(value);
+        if (std::string(key) == "steps")
+            if (!params.sample_params.sample_steps)
+                params.sample_params.sample_steps = static_cast<int>(value);
+        if (field == "shifted_timestep")
+            if (!params.sample_params.shifted_timestep)
+                params.sample_params.shifted_timestep = static_cast<int>(value);
+        if (field == "video_frames")
+            if (!params.video_frames)
+                params.video_frames = static_cast<int>(value);
+        if (field == "fps")
+            if (!params.fps)
+                params.fps = static_cast<int>(value);
+        if (field == "high_noise_steps")
+            if (!params.high_noise_sample_params.sample_steps)
+                params.high_noise_sample_params.sample_steps = static_cast<int>(value);
+    }
+    for (const char* key : {"cfg_scale", "strength", "moe_boundary", "img_cfg_scale", "distilled_guidance", "flow_shift", "high_noise_cfg_scale", "high_noise_flow_shift"}) {
+        if (!defaults.contains(key)) {
+            continue;
+        }
+        if (!defaults[key].is_number()) {
+            throw std::runtime_error(std::string(key) + " must be a number");
+        }
+        const float value = defaults[key].get<float>();
+        if (!std::isfinite(value) || value < 0 || value > ((std::string(key) == "strength" || std::string(key) == "moe_boundary") ? 1.f : 1000.f)) {
+            throw std::runtime_error(std::string(key) + " is out of range");
+        }
+        if (std::string(key) == "strength")
+            if (!params.strength)
+                params.strength = value;
+        if (std::string(key) == "moe_boundary")
+            if (!params.moe_boundary)
+                params.moe_boundary = value;
+        if (std::string(key) == "cfg_scale")
+            if (!params.sample_params.guidance.txt_cfg)
+                params.sample_params.guidance.txt_cfg = value;
+        if (std::string(key) == "img_cfg_scale")
+            if (!params.sample_params.guidance.img_cfg)
+                params.sample_params.guidance.img_cfg = value;
+        if (std::string(key) == "distilled_guidance")
+            if (!params.sample_params.guidance.distilled_guidance)
+                params.sample_params.guidance.distilled_guidance = value;
+        if (std::string(key) == "flow_shift")
+            if (!params.sample_params.flow_shift && !params.high_noise_sample_params.flow_shift)
+                params.sample_params.flow_shift = value;
+        if (std::string(key) == "high_noise_cfg_scale")
+            if (!params.high_noise_sample_params.guidance.txt_cfg)
+                params.high_noise_sample_params.guidance.txt_cfg = value;
+        if (std::string(key) == "high_noise_flow_shift")
+            if (!params.sample_params.flow_shift && !params.high_noise_sample_params.flow_shift)
+                params.high_noise_sample_params.flow_shift = value;
+    }
+    if (defaults.contains("custom_sigmas")) {
+        const auto& sigmas = defaults.at("custom_sigmas");
+        if (!sigmas.is_array() || sigmas.size() == 1 || sigmas.size() > 1001)
+            throw std::runtime_error("custom_sigmas must be empty or contain 2-1001 values");
+        for (const auto& sigma : sigmas) {
+            if (!sigma.is_number() || !std::isfinite(sigma.get<float>()) || sigma.get<float>() < 0)
+                throw std::runtime_error("custom_sigmas must contain finite nonnegative numbers");
+        }
+        if (!params.custom_sigmas)
+            params.custom_sigmas = sigmas.get<std::vector<float>>();
+    }
+    for (const char* key : {"sampling_method", "high_noise_sampling_method"}) {
+        if (!defaults.contains(key))
+            continue;
+        auto& sample    = std::string(key) == "sampling_method" ? params.sample_params : params.high_noise_sample_params;
+        const auto name = defaults.at(key).get<std::string>();
+        if (!example_options::contains(example_options::sample_methods, name))
+            throw std::runtime_error(std::string("unknown ") + key);
+        if (!sample.sample_method)
+            sample.sample_method = name;
+    }
+    for (const char* key : {"scheduler", "high_noise_scheduler"}) {
+        if (!defaults.contains(key))
+            continue;
+        auto& sample    = std::string(key) == "scheduler" ? params.sample_params : params.high_noise_sample_params;
+        const auto name = defaults.at(key).get<std::string>();
+        if (!example_options::contains(example_options::schedulers, name) && name != "normal")
+            throw std::runtime_error(std::string("unknown ") + key);
+        if (!params.sample_params.scheduler && !params.high_noise_sample_params.scheduler)
+            sample.scheduler = name;
+    }
+}
+
+static void apply_recipe_context(const json& settings, SDContextParams& params) {
+    check_keys(settings, {"vae_format", "model_args", "backend", "params_backend"});
+    if (settings.contains("vae_format")) {
+        const auto format = settings.at("vae_format").get<std::string>();
+        if (format != "auto" && format != "flux" && format != "sd3" && format != "flux2" && format != "wan")
+            throw std::runtime_error("unknown vae_format");
+        if (!params.vae_format)
+            params.vae_format = format;
+    }
+    if (settings.contains("model_args")) {
+        if (!params.model_args)
+            params.model_args = settings.at("model_args").get<std::string>();
+    }
+    if (settings.contains("backend")) {
+        if (!params.backend)
+            params.backend = settings.at("backend").get<std::string>();
+    }
+    if (settings.contains("params_backend")) {
+        if (!params.params_backend)
+            params.params_backend = settings.at("params_backend").get<std::string>();
+    }
+}
+
+// Known recipe feature names with their defaults; recipes may flip any of these.
+static const std::map<std::string, bool> k_recipe_features = {
+    {"img2img", true},
+    {"mask_image", true},
+    {"lora", true},
+    {"vae_tiling", true},
+    {"cache", true},
+    {"cache_dit", true},
+    {"preview", true},
+    {"flow_shift", false},
+    {"distilled_guidance", false},
+    {"shifted_timestep", false},
+    {"img_cfg", false},
+    {"slg", false},
+    {"clip_skip", false},
+    {"ref_images", false},
+    {"controlnet", false},
+    {"control_image", false},
+    {"ip_adapter", false},
+    {"init_image", false},
+    {"end_image", false},
+    {"control_frames", false},
+    {"ref_videos", false},
+    {"ref_audios", false},
+    {"ref_video_audios", false},
+    {"vace", false},
+    {"high_noise", false},
+    {"cache_unet", false},
+    {"preview_tae", false},
+};
+
+static void validate_recipe_features(const json& recipe) {
+    for (const char* key : {"features", "disabled_features"}) {
+        if (!recipe.contains(key))
+            continue;
+        const auto& values = recipe.at(key);
+        if (!values.is_array() || values.size() > k_recipe_features.size())
+            throw std::runtime_error(std::string(key) + " must be an array of feature names");
+        std::set<std::string> seen;
+        for (const auto& value : values) {
+            const auto name = value.get<std::string>();
+            if (!k_recipe_features.count(name) || !seen.insert(name).second)
+                throw std::runtime_error("unknown or duplicate feature: " + name);
+        }
+    }
+}
+
+json resolve_recipe_features(const json& recipe) {
+    json features = k_recipe_features;
+    for (const auto& slot : recipe.at("slots")) {
+        const auto id = slot.at("id").get<std::string>();
+        if (id == "ip_adapter")
+            features["ip_adapter"] = true;
+        if (id == "control_net")
+            features["controlnet"] = true;
+        if (id == "high_noise_diffusion_model")
+            features["high_noise"] = true;
+        if (id == "tae" || id == "taesd")
+            features["preview_tae"] = true;
+    }
+    for (const auto& name : recipe.value("features", json::array()))
+        features[name.get<std::string>()] = true;
+    for (const auto& name : recipe.value("disabled_features", json::array()))
+        features[name.get<std::string>()] = false;
+    for (const char* name : {"ip_adapter", "slg", "shifted_timestep"})
+        features[name] = false;
+    return features;
+}
+
+json model_generation_features(const ServerRuntime& runtime) {
+    const auto& recipe = runtime.models->current_recipe;
+    if (!recipe.is_null()) {
+        auto features = recipe.at("effective_features");
+        if (recipe.value("source", "") != "command_line") {
+            const auto& context          = *runtime.ctx_params;
+            features["controlnet"]       = features.at("controlnet").get<bool>() && !context.control_net_path.empty();
+            features["high_noise"]       = features.at("high_noise").get<bool>() && !context.high_noise_diffusion_model_path.empty();
+            features["preview_tae"]      = features.at("preview_tae").get<bool>() && !context.taesd_path.empty();
+            features["ref_audios"]       = features.at("ref_audios").get<bool>() && (!context.audio_vae_path.empty() || !context.audio_encoder_path.empty());
+            features["ref_video_audios"] = features.at("ref_video_audios").get<bool>() && !context.audio_vae_path.empty();
+        }
+        return features;
+    }
+    json features = k_recipe_features;
+    for (auto& feature : features)
+        feature = false;
+    return features;
+}
+
+static void validate_video_constraints(const json& constraints) {
+    check_keys(constraints, {"frame_step", "frame_offset", "frame_rounding", "min_frames", "max_frames", "fixed_fps"});
+    for (const auto* key : {"frame_step", "frame_offset", "min_frames", "max_frames", "fixed_fps"}) {
+        const int minimum = std::string(key) == "frame_offset" ? 0 : 1;
+        const int maximum = std::string(key) == "fixed_fps" ? 240 : 4096;
+        if (constraints.contains(key) &&
+            (!constraints[key].is_number_integer() || constraints[key] < minimum || constraints[key] > maximum)) {
+            throw std::runtime_error(std::string("video_constraints.") + key + " is outside its integer range");
+        }
+    }
+    const int step    = constraints.value("frame_step", 1);
+    const int offset  = constraints.value("frame_offset", 0);
+    const int minimum = constraints.value("min_frames", 1);
+    const int maximum = constraints.value("max_frames", 4096);
+    if (offset >= step || minimum > maximum ||
+        offset + std::max(0, (minimum - offset + step - 1) / step) * step > maximum) {
+        throw std::runtime_error("video_constraints must describe a nonempty frame range with frame_offset < frame_step");
+    }
+    if (constraints.contains("frame_rounding") &&
+        constraints["frame_rounding"] != "floor" && constraints["frame_rounding"] != "ceil") {
+        throw std::runtime_error("video_constraints.frame_rounding must be floor or ceil");
+    }
+}
+
+static void validate_recipe(const json& recipe) {
+    check_keys(recipe, {"schema_version", "id", "name", "description", "model_url", "slots", "required_any", "models", "defaults", "context", "features", "disabled_features", "size_multiple", "video_constraints"});
+    if (!recipe.at("schema_version").is_number_integer() || recipe.at("schema_version") != 1 ||
+        !valid_identifier(recipe.at("id").get<std::string>()) || recipe.at("name").get<std::string>().empty()) {
+        throw std::runtime_error("invalid schema_version, id or name");
+    }
+    if (recipe.contains("description") && !recipe["description"].is_string()) {
+        throw std::runtime_error("description must be a string");
+    }
+    if (recipe.contains("size_multiple") &&
+        (!recipe["size_multiple"].is_number_integer() || recipe["size_multiple"] < 1 || recipe["size_multiple"] > 4096)) {
+        throw std::runtime_error("size_multiple must be an integer from 1 to 4096");
+    }
+    if (recipe.contains("video_constraints")) {
+        validate_video_constraints(recipe["video_constraints"]);
+    }
+    if (recipe.contains("model_url")) {
+        const auto url           = recipe.at("model_url").get<std::string>();
+        const std::string prefix = "https://huggingface.co/";
+        if (url.size() <= prefix.size() || url.size() > 2048 || url.rfind(prefix, 0) != 0 ||
+            std::any_of(url.begin(), url.end(), [](unsigned char c) { return std::isspace(c) || std::iscntrl(c); })) {
+            throw std::runtime_error("model_url must be a Hugging Face HTTPS URL");
+        }
+    }
+    const auto& slots = recipe.at("slots");
+    if (!slots.is_array() || slots.empty() || slots.size() > 32) {
+        throw std::runtime_error("slots must be a nonempty array of at most 32 entries");
+    }
+    std::set<std::string> ids;
+    bool has_required_model = false;
+    for (const auto& slot : slots) {
+        check_keys(slot, {"id", "label", "category", "required"});
+        const auto id    = slot.at("id").get<std::string>();
+        const auto* spec = find_model_slot(id);
+        if (!spec || !ids.insert(id == "taesd" ? "tae" : id).second ||
+            (slot.contains("category") && !matches_model_category(*spec, slot.at("category").get<std::string>())) ||
+            (slot.contains("label") && slot.at("label").get<std::string>().empty()) || !slot.at("required").is_boolean()) {
+            throw std::runtime_error("invalid or duplicate model slot: " + id);
+        }
+        has_required_model |= (id == "model" || id == "diffusion_model") && slot["required"].get<bool>();
+    }
+    if (!has_required_model) {
+        throw std::runtime_error("a required model or diffusion_model slot is needed");
+    }
+    // Optional recipe-local model defaults: slot ID to file ID mappings that
+    // prefill slots a load request does not select itself.
+    if (recipe.contains("models")) {
+        const auto& recipe_models = recipe.at("models");
+        if (!recipe_models.is_object() || recipe_models.size() > 32)
+            throw std::runtime_error("models must be an object of at most 32 slot entries");
+        std::set<std::string> default_ids;
+        for (auto it = recipe_models.begin(); it != recipe_models.end(); ++it) {
+            if (!ids.count(it.key() == "taesd" ? "tae" : it.key()) || !it.value().is_string() || it.value().get<std::string>().empty() ||
+                !default_ids.insert(it.key() == "taesd" ? "tae" : it.key()).second)
+                throw std::runtime_error("unknown or invalid default model: " + it.key());
+        }
+    }
+    if (recipe.contains("required_any")) {
+        const auto& groups = recipe.at("required_any");
+        if (!groups.is_array() || groups.size() > 32)
+            throw std::runtime_error("required_any must be an array of at most 32 slot groups");
+        for (const auto& group : groups) {
+            if (!group.is_array() || group.size() < 2 || group.size() > slots.size())
+                throw std::runtime_error("required_any groups need at least two declared slots");
+            std::set<std::string> seen;
+            for (const auto& value : group) {
+                const auto id = value.get<std::string>();
+                if (!seen.insert(id).second || std::none_of(slots.begin(), slots.end(), [&](const json& slot) { return slot.at("id") == id; }))
+                    throw std::runtime_error("unknown or duplicate required_any slot: " + id);
+            }
+        }
+    }
+    validate_recipe_features(recipe);
+    SDContextParams context;
+    apply_recipe_context(recipe.value("context", json::object()), context);
+    SDGenerationParams defaults;
+    apply_recipe_defaults(recipe.value("defaults", json::object()), defaults);
+}
+
+static json normalize_recipe(json recipe) {
+    validate_recipe(recipe);
+    recipe["size_multiple"]      = recipe.value("size_multiple", 8);
+    recipe["effective_features"] = resolve_recipe_features(recipe);
+    for (auto& slot : recipe.at("slots")) {
+        const auto& spec   = *find_model_slot(slot.at("id").get<std::string>());
+        slot["label"]      = slot.value("label", std::string(spec.label));
+        slot["category"]   = slot.value("category", spec.categories.front());
+        slot["categories"] = spec.categories;
+    }
+    return recipe;
+}
+
+static bool supported_model_file(const fs::path& path, const std::string& category) {
+    std::string ext = path.extension().u8string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+    if (category == "tokenizers") {
+        return ext == ".json";
+    }
+    return ext == ".gguf" || ext == ".safetensors" || ext == ".sft" ||
+           ext == ".ckpt" || ext == ".pt" || ext == ".pth" || ext == ".bin";
+}
+
+void refresh_model_catalog(ServerRuntime& runtime) {
+    auto& models = *runtime.models;
+    std::lock_guard<std::mutex> lock(models.catalog_mutex);
+    std::map<std::string, json> recipes;
+    std::map<std::string, ModelFile> files;
+    json errors = json::array();
+    auto report = [&](const std::string& file, const std::string& message) {
+        errors.push_back({{"file", file}, {"message", message}});
+    };
+    for (const char* builtin : k_builtin_recipes) {
+        auto recipe      = normalize_recipe(json::parse(builtin));
+        const auto id    = recipe.at("id").get<std::string>();
+        recipe["source"] = "builtin";
+        recipes[id]      = std::move(recipe);
+    }
+
+    std::set<std::string> seen_files;
+    for (const auto& source : get_model_roots(*runtime.svr_params)) {
+        const auto& root  = source.path;
+        auto display_path = [&](const fs::path& path) {
+            return source.id + "/" + path.lexically_relative(root).generic_u8string();
+        };
+        const fs::path recipe_dir = root / "recipes";
+        std::map<std::string, std::vector<json>> user_recipes;
+        try {
+            if (fs::exists(recipe_dir)) {
+                if (!model_path_inside(root, fs::canonical(recipe_dir)))
+                    throw std::runtime_error("recipes directory escapes model directory");
+                for (const auto& entry : fs::directory_iterator(recipe_dir)) {
+                    const std::string display = display_path(entry.path());
+                    if (entry.path().extension() != ".json")
+                        continue;
+                    try {
+                        if (!entry.is_regular_file() || !model_path_inside(root, fs::canonical(entry.path())))
+                            throw std::runtime_error("recipe must be a file inside the model directory");
+                        if (entry.file_size() > 1024 * 1024)
+                            throw std::runtime_error("recipe exceeds 1 MiB");
+                        std::ifstream input(entry.path(), std::ios::binary);
+                        json recipe;
+                        input >> recipe;
+                        recipe           = normalize_recipe(std::move(recipe));
+                        recipe["source"] = "user";
+                        recipe["file"]   = entry.path().filename().u8string();
+                        recipe["root"]   = source.id;
+                        const auto id    = recipe.at("id").get<std::string>();
+                        user_recipes[id].push_back(std::move(recipe));
+                    } catch (const std::exception& e) {
+                        report(display, e.what());
+                    }
+                }
+            }
+        } catch (const std::exception& e) {
+            report(display_path(recipe_dir), e.what());
+        }
+        for (auto& item : user_recipes) {
+            if (item.second.size() != 1) {
+                for (const auto& recipe : item.second)
+                    report(source.id + "/recipes/" + recipe["file"].get<std::string>(), "duplicate user recipe id: " + item.first);
+                continue;
+            }
+            const auto existing = recipes.find(item.first);
+            if (existing != recipes.end()) {
+                if (existing->second["source"] == "user") {
+                    LOG_WARN("recipe '%s' from %s is shadowed by an earlier model directory", item.first.c_str(), source.label.c_str());
+                    continue;
+                }
+                LOG_INFO("user recipe '%s' from %s overrides the builtin", item.first.c_str(), source.label.c_str());
+            }
+            recipes[item.first] = std::move(item.second.front());
+        }
+
+        std::set<std::string> categories;
+        for (const auto& slot : k_model_slots)
+            categories.insert(slot.categories.begin(), slot.categories.end());
+        for (const auto& category : categories) {
+            try {
+                for (const auto& directory : model_category_directories(source, category)) {
+                    if (!model_path_inside(root, fs::canonical(directory))) {
+                        report(display_path(directory), "category directory escapes model directory");
+                        continue;
+                    }
+                    for (fs::recursive_directory_iterator it(directory), end; it != end; ++it) {
+                        std::error_code path_error;
+                        const fs::path canonical = fs::canonical(it->path(), path_error);
+                        if (path_error || !model_path_inside(root, canonical)) {
+                            it.disable_recursion_pending();
+                            report(display_path(it->path()), path_error ? path_error.message() : "path escapes model directory");
+                            continue;
+                        }
+                        if (!it->is_regular_file() || !supported_model_file(it->path(), category) ||
+                            !seen_files.insert(model_path_key(canonical)).second)
+                            continue;
+                        const auto relative = it->path().lexically_relative(root).generic_u8string();
+                        const auto id       = source.primary ? relative : source.id + "/" + relative;
+                        files[id]           = {category, it->path().lexically_relative(directory).generic_u8string(), relative, source};
+                    }
+                }
+            } catch (const std::exception& e) {
+                report(source.id + "/" + category, e.what());
+            }
+        }
+    }
+    std::map<std::pair<std::string, std::string>, size_t> names;
+    for (const auto& entry : files)
+        ++names[{entry.second.category, entry.second.name}];
+    for (auto& entry : files) {
+        auto& file = entry.second;
+        if (names[{file.category, file.name}] > 1)
+            file.name = (file.root.path / fs::u8path(file.relative_path)).generic_u8string();
+    }
+    models.recipes        = std::move(recipes);
+    models.files          = std::move(files);
+    models.catalog_errors = std::move(errors);
+}
+
+json model_status(const ServerRuntime& runtime) {
+    const auto& models = *runtime.models;
+    const auto& recipe = models.current_recipe;
+    const bool startup = !recipe.is_null() && recipe.value("source", "") == "command_line";
+    json status        = {{"state", recipe.is_null() ? "empty" : "configured"},
+                          {"recipe", recipe.is_null() || startup ? json(nullptr) : recipe.at("id")},
+                          {"models", models.current_files},
+                          {"error", nullptr},
+                          {"revision", models.revision}};
+    if (startup)
+        status["origin"] = "command_line";
+    if (!recipe.is_null()) {
+        status["runtime_recipe"] = {{"id", "@current"}, {"name", "Current server model"}, {"source", "current"}, {"size_multiple", recipe.value("size_multiple", 8)}, {"slots", json::array()}};
+        if (recipe.contains("video_constraints"))
+            status["runtime_recipe"]["video_constraints"] = recipe.at("video_constraints");
+    }
+    return status;
+}
+
+void initialize_server_models(ServerRuntime& runtime) {
+    auto& models        = *runtime.models;
+    models.base_context = *runtime.ctx_params;
+    clear_model_paths(models.base_context);
+    models.base_defaults = *runtime.default_gen_params;
+    if (has_current_model(runtime)) {
+        json features = json::array();
+        for (const auto& feature : k_recipe_features)
+            features.push_back(feature.first);
+        models.current_recipe = {
+            {"id", "@command-line"},
+            {"name", "Command-line model (all features)"},
+            {"source", "command_line"},
+            {"description", "Uses the model and generation defaults specified on the command line."},
+            {"slots", json::array()},
+            {"defaults", json::object()},
+            {"size_multiple", 8},
+            {"features", features},
+        };
+        models.current_recipe["effective_features"] = resolve_recipe_features(models.current_recipe);
+    }
+    refresh_model_catalog(runtime);
+}
+
+ServerModelSelection resolve_model_selection(ServerRuntime& runtime, const json& body, SDMode mode) {
+    check_keys(body, {"recipe", "models"});
+    const auto recipe_id = body.at("recipe").get<std::string>();
+    // `models` is optional; unselected slots may fall back to recipe defaults below.
+    auto selection = body.value("models", json::object());
+    if (!selection.is_object())
+        throw std::runtime_error("models must be an object");
+    auto& models = *runtime.models;
+    std::lock_guard<std::mutex> lock(models.catalog_mutex);
+    const auto found = models.recipes.find(recipe_id);
+    if (found == models.recipes.end())
+        throw std::runtime_error("unknown recipe");
+    const auto& recipe         = found->second;
+    const auto recipe_defaults = recipe.value("defaults", json::object());
+    if (mode == VID_GEN && !recipe_defaults.contains("video_frames"))
+        throw std::runtime_error("selected recipe does not support vid_gen: " + recipe_id);
+    auto context  = models.base_context;
+    auto defaults = models.base_defaults;
+    apply_recipe_context(recipe.value("context", json::object()), context);
+    apply_recipe_defaults(recipe_defaults, defaults);
+    // Recipe-provided default models fill any slot the request did not select.
+    // An explicit selection blocks the default for that slot, including an
+    // empty string (a deliberate opt-out of the default). The tae/taesd pair
+    // is one slot: an explicit request selection of either spelling overrides
+    // the recipe default for that slot.
+    if (recipe.contains("models")) {
+        for (auto it = recipe.at("models").begin(); it != recipe.at("models").end(); ++it) {
+            if (selection.contains(it.key()))
+                continue;
+            if ((it.key() == "tae" || it.key() == "taesd") && (selection.contains("tae") || selection.contains("taesd")))
+                continue;
+            selection[it.key()] = it.value();
+        }
+    }
+    std::set<std::string> allowed;
+    for (const auto& slot : recipe.at("slots")) {
+        const auto id = slot.at("id").get<std::string>();
+        allowed.insert(id);
+        if (id == "tae" || id == "taesd") {
+            const std::string alias = id == "tae" ? "taesd" : "tae";
+            allowed.insert(alias);
+            if (selection.contains(alias)) {
+                if (selection.contains(id))
+                    throw std::runtime_error("specify only one of tae and taesd");
+                selection[id] = selection.at(alias);
+                // Normalize the alias so the same selection reuses the current configuration.
+                selection.erase(alias);
+            }
+        }
+        const std::string file_id = selection.value(id, std::string());
+        if (file_id.empty()) {
+            if (slot.at("required").get<bool>())
+                throw std::runtime_error("missing required model: " + id);
+            continue;
+        }
+        const auto file = models.files.find(file_id);
+        if (file == models.files.end() || !matches_model_category(*find_model_slot(id), file->second.category)) {
+            throw std::runtime_error("unknown model or incorrect category: " + id);
+        }
+        const auto& root    = file->second.root.path;
+        const fs::path path = fs::canonical(root / fs::u8path(file->second.relative_path));
+        if (!model_path_inside(root, path) || !fs::is_regular_file(path)) {
+            throw std::runtime_error("model file must remain inside the model directory: " + id);
+        }
+        context.*find_model_slot(id)->field = path.u8string();
+    }
+    for (auto it = selection.begin(); it != selection.end(); ++it) {
+        if (!allowed.count(it.key()))
+            throw std::runtime_error("unknown model slot: " + it.key());
+    }
+    for (const auto& group : recipe.value("required_any", json::array())) {
+        if (std::none_of(group.begin(), group.end(), [&](const json& value) {
+                return !selection.value(value.get<std::string>(), std::string()).empty();
+            })) {
+            throw std::runtime_error("select at least one model from: " + group.dump());
+        }
+    }
+    if (!context.resolve(IMG_GEN))
+        throw std::runtime_error("invalid model context parameters");
+    auto options = context.to_context_opt();
+    if (!options)
+        throw std::runtime_error(sd_get_last_error());
+    for (auto it = selection.begin(); it != selection.end();) {
+        if (it.value() == "")
+            it = selection.erase(it);
+        else
+            ++it;
+    }
+    return {std::move(context), std::move(defaults), recipe, std::move(selection), std::move(options)};
+}
+
+bool set_current_model(ServerRuntime& runtime, ServerModelSelection&& selection, SDMode mode, std::string& error_message) {
+    auto& models = *runtime.models;
+    std::unique_lock<std::shared_mutex> lock(models.model_mutex);
+    if (models.current_recipe == selection.recipe && models.current_files == selection.files &&
+        std::all_of(std::begin(k_model_slots), std::end(k_model_slots), [&](const ModelSlot& slot) {
+            return runtime.ctx_params->*slot.field == selection.context.*slot.field;
+        })) {
+        if (runtime_supports_generation_mode(runtime, mode))
+            return true;
+        error_message = unsupported_generation_mode_error(mode);
+        return false;
+    }
+    const auto kind = mode == VID_GEN ? SD_RESULT_VIDEO : SD_RESULT_IMAGE;
+    if (sd_ctx_set_model_options_for_generation(runtime.sd_ctx, selection.options.get(), kind) != SD_STATUS_OK) {
+        error_message = sd_get_last_error();
+        return false;
+    }
+    *runtime.ctx_params         = std::move(selection.context);
+    *runtime.default_gen_params = std::move(selection.defaults);
+    models.current_recipe       = std::move(selection.recipe);
+    models.current_files        = std::move(selection.files);
+    ++models.revision;
+    return true;
+}

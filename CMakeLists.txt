@@ -9,13 +9,23 @@ if (NOT XCODE AND NOT MSVC AND NOT CMAKE_BUILD_TYPE)
 endif()
 
 if (MSVC)
+    cmake_host_system_information(RESULT SD_PHYSICAL_CORES QUERY NUMBER_OF_PHYSICAL_CORES)
+    set(SD_DEFAULT_MSVC_MP_COUNT "${SD_PHYSICAL_CORES}")
+    if (NOT SD_DEFAULT_MSVC_MP_COUNT GREATER 0)
+        set(SD_DEFAULT_MSVC_MP_COUNT 1)
+    endif()
+    set(SD_MSVC_MP_COUNT "${SD_DEFAULT_MSVC_MP_COUNT}" CACHE STRING "Maximum parallel MSVC compilations per project")
+    if (NOT SD_MSVC_MP_COUNT MATCHES "^[1-9][0-9]*$" OR SD_MSVC_MP_COUNT GREATER 65536)
+        message(FATAL_ERROR "SD_MSVC_MP_COUNT must be an integer between 1 and 65536")
+    endif()
+    message("-- SD_MSVC_MP_COUNT: ${SD_MSVC_MP_COUNT}")
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
     add_compile_definitions(_SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING)
     # /MP is MSVC-only: icx rejects it outright once offloading is enabled.
     add_compile_options(
-        $<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:MSVC>>:/MP>
+        $<$<AND:$<COMPILE_LANGUAGE:C>,$<C_COMPILER_ID:MSVC>>:/MP${SD_MSVC_MP_COUNT}>
         $<$<COMPILE_LANGUAGE:C>:/utf-8>
-        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:MSVC>>:/MP>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:MSVC>>:/MP${SD_MSVC_MP_COUNT}>
         $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
     )
 endif()
@@ -83,7 +93,7 @@ endif()
 option(SD_BUILD_EXAMPLES             "sd: build examples" ${SD_STANDALONE})
 option(SD_WEBP                       "sd: enable WebP image I/O support" ${SD_WEBP_DEFAULT})
 option(SD_USE_SYSTEM_WEBP            "sd: link against system libwebp" OFF)
-option(SD_WEBM                       "sd: enable WebM video output support" ${SD_WEBM_DEFAULT})
+option(SD_WEBM                       "sd: enable WebM video I/O support" ${SD_WEBM_DEFAULT})
 option(SD_USE_SYSTEM_WEBM            "sd: link against system libwebm" OFF)
 option(SD_CUDA                       "sd: cuda backend" OFF)
 option(SD_HIPBLAS                    "sd: rocm backend" OFF)
@@ -111,6 +121,12 @@ if(SD_CUDA)
 endif()
 
 if(SD_METAL)
+    if(NOT SD_USE_UPSTREAM_GGML)
+        if(CMAKE_VERSION VERSION_LESS 3.16)
+            message(FATAL_ERROR "SD_METAL with SD_USE_UPSTREAM_GGML=OFF requires CMake 3.16 or later for OBJC and OBJCXX support")
+        endif()
+        enable_language(OBJC OBJCXX)
+    endif()
     message("-- Use Metal as backend stable-diffusion")
     set(GGML_METAL ON)
 endif()
@@ -163,13 +179,21 @@ if(SD_WEBP)
                     "Expected WebP::libwebpmux or WebP::webpmux."
                 )
             endif()
+            if(TARGET WebP::webpdemux)
+                add_library(webpdemux ALIAS WebP::webpdemux)
+            elseif(TARGET WebP::libwebpdemux)
+                add_library(webpdemux ALIAS WebP::libwebpdemux)
+            else()
+                message(FATAL_ERROR "System WebP package must provide WebP::webpdemux or WebP::libwebpdemux.")
+            endif()
         else()
             find_package(PkgConfig REQUIRED)
             pkg_check_modules(WebP REQUIRED IMPORTED_TARGET GLOBAL libwebp)
             pkg_check_modules(WebPMux REQUIRED IMPORTED_TARGET GLOBAL libwebpmux)
-            link_libraries(PkgConfig::WebP)
-            link_libraries(PkgConfig::WebPMux)
+            pkg_check_modules(WebPDemux REQUIRED IMPORTED_TARGET GLOBAL libwebpdemux)
+            add_library(webp ALIAS PkgConfig::WebP)
             add_library(libwebpmux ALIAS PkgConfig::WebPMux)
+            add_library(webpdemux ALIAS PkgConfig::WebPDemux)
         endif()
     endif()
 endif()
@@ -189,7 +213,7 @@ if(SD_WEBM)
             pkg_check_modules(WebM REQUIRED IMPORTED_TARGET GLOBAL libwebm)
         endif()
         if(PkgConfig_FOUND AND WebM_FOUND)
-            link_libraries(PkgConfig::WebM)
+            add_library(webm ALIAS PkgConfig::WebM)
         else()
             find_path(WEBM_INCLUDE_DIR
                 NAMES mkvmuxer/mkvmuxer.h mkvparser/mkvparser.h common/webmids.h
@@ -215,24 +239,49 @@ endif ()
 
 set(SD_LIB stable-diffusion)
 
+file(GLOB SD_API_TEMPLATES CONFIGURE_DEPENDS "src/api/templates/*.dgl")
+set(SD_API_TEMPLATE_CONTENT "#ifndef __SD_API_TEMPLATES_H__\n#define __SD_API_TEMPLATES_H__\n#include <map>\n#include <string>\n#include <string_view>\nnamespace sd::api::templates {\ninline const std::map<std::string, std::string_view> sources = {\n")
+foreach(SD_API_TEMPLATE IN LISTS SD_API_TEMPLATES)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${SD_API_TEMPLATE}")
+    get_filename_component(SD_API_TEMPLATE_NAME "${SD_API_TEMPLATE}" NAME_WE)
+    file(READ "${SD_API_TEMPLATE}" SD_API_TEMPLATE_TEXT)
+    string(APPEND SD_API_TEMPLATE_CONTENT "{\"${SD_API_TEMPLATE_NAME}\", R\"SD_DGL(${SD_API_TEMPLATE_TEXT})SD_DGL\"},\n")
+endforeach()
+string(APPEND SD_API_TEMPLATE_CONTENT "};\n}\n#endif\n")
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/api_templates.h" CONTENT "${SD_API_TEMPLATE_CONTENT}")
+
 file(GLOB SD_LIB_SOURCES CONFIGURE_DEPENDS
     "src/*.h"
     "src/*.cpp"
     "src/*.hpp"
+    "src/api/*.h"
+    "src/api/*.cpp"
     "src/conditioning/*.h"
     "src/conditioning/*.cpp"
     "src/conditioning/*.hpp"
     "src/core/*.h"
     "src/core/*.cpp"
     "src/core/*.hpp"
+    "src/core/cpu/*.h"
+    "src/core/cpu/*.cpp"
+    "src/core/probe/*.h"
+    "src/core/probe/*.cpp"
     "src/extensions/*.h"
     "src/extensions/*.cpp"
     "src/extensions/*.hpp"
+    "src/dgl/*.h"
+    "src/dgl/*.cpp"
+    "src/dgl/syntax/*.h"
+    "src/dgl/syntax/*.cpp"
+    "src/dgl/bindings/*.h"
+    "src/dgl/bindings/*.cpp"
+    "src/dgl/models/*.h"
+    "src/dgl/models/*.cpp"
+    "src/dgl/ops/*.h"
+    "src/dgl/ops/*.cpp"
     "src/model/*/*.h"
     "src/model/*/*.cpp"
     "src/model/*/*.hpp"
-    "src/pipeline/*.h"
-    "src/pipeline/*.cpp"
     "src/runtime/*.h"
     "src/runtime/*.cpp"
     "src/runtime/*.hpp"
@@ -336,21 +385,93 @@ target_link_libraries(${SD_LIB} PUBLIC ggml)
 find_package(Threads REQUIRED)
 target_link_libraries(${SD_LIB} PRIVATE Threads::Threads)
 target_link_libraries(${SD_LIB} PRIVATE onig sd-utf8proc)
+if(SD_WEBP)
+    target_compile_definitions(${SD_LIB} PRIVATE SD_USE_WEBP)
+    target_link_libraries(${SD_LIB} PRIVATE webp webpdemux)
+endif()
+if(SD_WEBM)
+    target_compile_definitions(${SD_LIB} PRIVATE SD_USE_WEBM)
+    target_link_libraries(${SD_LIB} PRIVATE webm)
+endif()
 if (SD_CUDA)
     find_package(CUDAToolkit REQUIRED)
     # Keep the driver stub on downstream link lines when no driver is installed.
     target_link_libraries(${SD_LIB} PUBLIC CUDA::cuda_driver)
     set_property(SOURCE src/core/ggml_extend_backend.cpp APPEND PROPERTY COMPILE_DEFINITIONS SD_USE_CUDA)
+    if (NOT SD_USE_UPSTREAM_GGML)
+        include(cmake/cutlass.cmake)
+        if (TARGET ggml-cuda)
+            # ggml resolves CUDA architectures in a child directory scope.
+            get_target_property(CMAKE_CUDA_ARCHITECTURES ggml-cuda CUDA_ARCHITECTURES)
+        endif()
+        enable_language(CUDA)
+        set_target_properties(${SD_LIB} PROPERTIES
+            CUDA_STANDARD 17
+            CUDA_STANDARD_REQUIRED ON
+            CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
+        if (SD_CUDA_CUTLASS_PATH)
+            target_sources(${SD_LIB} PRIVATE src/core/cuda/cute_attention.cu src/core/cuda/i8_projection.cu src/core/cuda/i8_gated_residual.cu src/core/cuda/i8_gemm.cu src/core/cuda/bf16_gemm.cu)
+            set_source_files_properties(src/core/cuda/cute_attention.cu src/core/cuda/i8_projection.cu src/core/cuda/i8_gated_residual.cu src/core/cuda/i8_gemm.cu src/core/cuda/bf16_gemm.cu PROPERTIES
+                INCLUDE_DIRECTORIES "${SD_CUDA_CUTLASS_PATH}/include"
+                COMPILE_OPTIONS "--use_fast_math;--extended-lambda;--expt-relaxed-constexpr")
+            if (MSVC)
+                set_property(SOURCE src/core/cuda/cute_attention.cu src/core/cuda/i8_projection.cu src/core/cuda/i8_gated_residual.cu src/core/cuda/i8_gemm.cu src/core/cuda/bf16_gemm.cu APPEND PROPERTY COMPILE_OPTIONS -Xcompiler=/Zc:preprocessor,/Zc:__cplusplus)
+            endif()
+            if (GGML_CUDA_FORCE_CUBLAS)
+                set_property(SOURCE src/core/cuda/i8_projection.cu src/core/cuda/i8_gated_residual.cu src/core/cuda/i8_gemm.cu src/core/cuda/bf16_gemm.cu APPEND PROPERTY COMPILE_DEFINITIONS SD_CUDA_FORCE_CUBLAS)
+            endif()
+        endif()
+    endif()
 endif()
-target_include_directories(${SD_LIB} PUBLIC . src include)
-target_include_directories(${SD_LIB} PRIVATE src/core)
-target_include_directories(${SD_LIB} PUBLIC . thirdparty)
+set(SD_BACKEND_REGISTRATIONS)
+if (SD_METAL AND NOT SD_USE_UPSTREAM_GGML)
+    add_subdirectory(src/core/metal)
+    target_link_libraries(${SD_LIB} PRIVATE "-framework Foundation" "-framework Metal")
+    list(APPEND SD_BACKEND_REGISTRATIONS sd_ggml_register_metal_i8)
+endif()
+if (NOT SD_USE_UPSTREAM_GGML AND (SD_CUDA OR SD_HIPBLAS OR SD_MUSA))
+    if(SD_HIPBLAS)
+        include(cmake/hip.cmake)
+    endif()
+    add_subdirectory(src/core/cuda)
+    foreach(VENDOR CUDA HIP MUSA)
+        if(SD_${VENDOR} OR (VENDOR STREQUAL "HIP" AND SD_HIPBLAS))
+            string(TOLOWER "${VENDOR}" NAMESPACE)
+            list(APPEND SD_BACKEND_REGISTRATIONS "sd_${NAMESPACE}::register_extensions")
+        endif()
+    endforeach()
+endif()
+if (SD_VULKAN AND NOT SD_USE_UPSTREAM_GGML)
+    add_subdirectory(src/core/vulkan)
+    list(APPEND SD_BACKEND_REGISTRATIONS sd_ggml_register_vulkan_rope sd_ggml_register_vulkan_i8 sd_ggml_register_vulkan_modulate sd_ggml_register_vulkan_rms_affine)
+endif()
+if(SD_BACKEND_REGISTRATIONS)
+    string(REPLACE ";" ",\n    " SD_BACKEND_REGISTRATIONS "${SD_BACKEND_REGISTRATIONS}")
+    configure_file(cmake/backend_extensions.h.in generated/sd_backend_extensions.h @ONLY)
+    set_property(SOURCE src/core/ggml_extensions.cpp APPEND PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    set_property(SOURCE src/core/ggml_extensions.cpp APPEND PROPERTY COMPILE_DEFINITIONS SD_BACKEND_EXTENSIONS)
+endif()
+if (SD_HIPBLAS)
+    find_package(hip REQUIRED CONFIG HINTS "$ENV{ROCM_PATH}" /opt/rocm)
+    target_link_libraries(${SD_LIB} PRIVATE hip::host)
+    set_property(SOURCE src/core/ggml_extend_backend.cpp APPEND PROPERTY COMPILE_DEFINITIONS SD_USE_HIP)
+    if (GGML_HIP_MMQ_MFMA)
+        set_property(SOURCE src/core/ggml_extend_backend.cpp APPEND PROPERTY COMPILE_DEFINITIONS SD_HIP_MFMA)
+    endif()
+endif()
+target_include_directories(${SD_LIB} PUBLIC include)
+target_include_directories(${SD_LIB} PRIVATE src src/core "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_include_directories(${SD_LIB} PUBLIC thirdparty)
 target_compile_features(${SD_LIB} PUBLIC c_std_11 cxx_std_17)
+set_target_properties(${SD_LIB} PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON)
 
 
 if (SD_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
+
 
 
 
@@ -369,12 +490,9 @@ set(SD_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location of h
 set(SD_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
 set(SD_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location of binary  files")
 
-set(SD_PUBLIC_HEADERS
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/stable-diffusion.h)
-
 set_target_properties(${SD_LIB}
     PROPERTIES
-        PUBLIC_HEADER "${SD_PUBLIC_HEADERS}")
+        PUBLIC_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/include/stable-diffusion.h")
 
 
 install(TARGETS ${SD_LIB}

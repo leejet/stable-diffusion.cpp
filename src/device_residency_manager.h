@@ -3,11 +3,17 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
+#include <string>
 #include <vector>
 
 #include "ggml-backend.h"
 
 struct ggml_tensor;
+
+namespace sd {
+    class ExecutionEngine;
+}
 
 enum class WeightPrefetchResult {
     Scheduled,
@@ -17,8 +23,15 @@ enum class WeightPrefetchResult {
 };
 
 struct WeightResidencyInfo {
-    bool async_prefetch_supported = false;
-    size_t missing_bytes          = 0;
+    bool async_prefetch_supported                          = false;
+    size_t missing_bytes                                   = 0;
+    ggml_backend_buffer_type_t single_prefetch_buffer_type = nullptr;
+};
+
+struct PrefetchBuffer {
+    ggml_backend_buffer_type_t type = nullptr;
+    size_t bytes                    = 0;
+    std::unique_ptr<ggml_backend_buffer, decltype(&ggml_backend_buffer_free)> buffer{nullptr, ggml_backend_buffer_free};
 };
 
 struct DeviceMemoryRequest {
@@ -27,6 +40,9 @@ struct DeviceMemoryRequest {
     size_t pending_allocation_bytes = 0;
     size_t runtime_resident_bytes   = 0;
     size_t max_backend_bytes        = 0;
+    // Exact-size buffer already checked out of the pool for this request.
+    size_t reused_buffer_bytes      = 0;
+    PrefetchBuffer* prefetch_buffer = nullptr;
 
     // Runtime buffers only; the manager accounts for weights separately.
     size_t runtime_peak_bytes() const {
@@ -36,18 +52,62 @@ struct DeviceMemoryRequest {
     }
 };
 
+struct DeviceMemoryCapacity {
+    size_t required_device_bytes  = 0;
+    size_t required_budget_bytes  = 0;
+    size_t available_device_bytes = SIZE_MAX;
+    size_t available_budget_bytes = SIZE_MAX;
+    bool requires_reclamation     = false;
+    bool valid                    = true;
+    bool wrapped_device_report    = false;
+
+    bool fits(bool after_reclamation = false) const {
+        return valid && !requires_reclamation &&
+               (after_reclamation || !wrapped_device_report) &&
+               required_device_bytes <= available_device_bytes &&
+               required_budget_bytes <= available_budget_bytes;
+    }
+};
+
+enum class DeviceMemoryCheck {
+    Inspect,
+    Reclaimable,
+    TrimBufferCache,
+};
+
+struct WeightResidencyBlock {
+    ggml_backend_buffer_t buffer = nullptr;
+    ggml_backend_t backend       = nullptr;
+    std::vector<ggml_tensor*> tensors;
+    size_t bytes            = 0;
+    uint64_t last_use_epoch = 0;
+    size_t next_use         = 0;
+    bool requires_demotion  = false;
+};
+
 struct DeviceResidencyManager {
+private:
+    std::shared_ptr<sd::ExecutionEngine> execution_engine_;
+
+public:
     virtual ~DeviceResidencyManager() = default;
 
-    virtual bool segmented_compute_enabled() const                                          = 0;
-    virtual bool prefetch_enabled() const                                                   = 0;
-    virtual void set_workspace_reclaimer(uintptr_t owner_id, std::function<bool()> reclaim) = 0;
-    virtual void remove_runtime_owner(uintptr_t owner_id)                                   = 0;
+    virtual std::shared_ptr<sd::ExecutionEngine> execution_engine();
+
+    virtual bool segmented_compute_enabled() const = 0;
+    virtual bool prefetch_enabled() const          = 0;
+    virtual bool retains_idle_weights() const { return false; }
+    virtual size_t context_vram_limit(ggml_backend_t) const { return 0; }
+    // Device bytes consume Windows commit without consuming physical host RAM.
+    virtual bool ensure_host_memory(size_t, const std::vector<ggml_tensor*>&, size_t = 0) { return true; }
+    virtual void register_runtime_owner(uintptr_t owner_id) = 0;
+    virtual void remove_runtime_owner(uintptr_t owner_id)   = 0;
     // Capacity requests select their backend's weights; protection spans all backends.
     virtual bool fits_compute_backend_capacity(const DeviceMemoryRequest& request,
-                                               const std::vector<ggml_tensor*>& required_params) const = 0;
+                                               const std::vector<ggml_tensor*>& required_params,
+                                               DeviceMemoryCheck check) const = 0;
     virtual bool assign_compute_backend(const std::vector<ggml_tensor*>& tensors,
-                                        ggml_backend_t compute_backend)                                = 0;
+                                        ggml_backend_t compute_backend)       = 0;
     virtual ggml_tensor* resolve_param_tensor(ggml_tensor* tensor) const { return nullptr; }
     virtual bool prepare_params(const std::vector<ggml_tensor*>& tensors)                 = 0;
     virtual void release_compute_backend_params(const std::vector<ggml_tensor*>& tensors) = 0;
@@ -61,10 +121,31 @@ struct DeviceResidencyManager {
         const DeviceMemoryRequest& request,
         const std::vector<ggml_tensor*>& required_params,
         const std::vector<std::vector<ggml_tensor*>>& preferred_eviction_order,
-        const std::vector<ggml_tensor*>& protected_params) = 0;
+        const std::vector<ggml_tensor*>& protected_params,
+        std::string* device_memory_error = nullptr) = 0;
+    virtual DeviceMemoryCapacity inspect_compute_backend_capacity(
+        const DeviceMemoryRequest& request,
+        const std::vector<ggml_tensor*>& params,
+        DeviceMemoryCheck check = DeviceMemoryCheck::Inspect,
+        bool log_details        = false) const {
+        DeviceMemoryCapacity result;
+        result.valid = false;
+        return result;
+    }
+    virtual std::vector<WeightResidencyBlock> evictable_compute_backend_blocks(
+        ggml_backend_t backend,
+        const std::vector<ggml_tensor*>& protected_params) const { return {}; }
+    virtual bool evict_compute_backend_block(const WeightResidencyBlock& block, PrefetchBuffer* prefetch_buffer = nullptr) { return false; }
     virtual WeightPrefetchResult prefetch_params(
         uintptr_t owner_id,
-        const std::vector<ggml_tensor*>& tensors)                                     = 0;
+        const std::vector<ggml_tensor*>& tensors) = 0;
+    virtual WeightPrefetchResult prepare_prefetch_params(
+        uintptr_t owner_id,
+        const std::vector<ggml_tensor*>& tensors,
+        PrefetchBuffer* prefetch_buffer = nullptr) {
+        return prefetch_params(owner_id, tensors);
+    }
+    virtual void submit_prefetched_params(uintptr_t owner_id) {}
     virtual bool activate_prefetched_params(uintptr_t owner_id,
                                             const std::vector<ggml_tensor*>& tensors) = 0;
     virtual void clear_prefetched_params(uintptr_t owner_id)                          = 0;

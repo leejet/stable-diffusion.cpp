@@ -1,0 +1,7 @@
+#ifndef __SD_EXAMPLES_SERVER_RECIPES_BUILTIN_H__
+#define __SD_EXAMPLES_SERVER_RECIPES_BUILTIN_H__
+
+static const char* const k_builtin_recipes[] = {
+@SD_BUILTIN_RECIPES@};
+
+#endif

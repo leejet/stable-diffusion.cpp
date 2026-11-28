@@ -2,17 +2,78 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <mutex>
 #include <regex>
 #include <sstream>
+#include <string_view>
 
 #include "common/common.h"
 #include "common/log.h"
+#include "model_catalog.h"
+
+#include <map>
+#include <set>
 
 namespace fs = std::filesystem;
+
+bool PromptImageCallbackGuard::load_image(const char* source, void* data, const sd_tensor_t** image_out) {
+    auto& guard        = *static_cast<PromptImageCallbackGuard*>(data);
+    const auto& params = guard.params_;
+    const auto it      = params.prompt_images.find(source);
+    if (it == params.prompt_images.end()) {
+        LOG_ERROR("Unknown prompt image ID: %s", source);
+        return false;
+    }
+    guard.image_tensor_ = image_tensor(it->second.get());
+    *image_out          = guard.image_tensor_.get();
+    return *image_out != nullptr;
+}
+
+PromptImageCallbackGuard::PromptImageCallbackGuard(sd_ctx_t* ctx, const SDGenerationParams& params)
+    : ctx_(ctx), params_(params) {
+    sd_set_prompt_image_callback(ctx_, load_image, this);
+}
+
+PromptImageCallbackGuard::~PromptImageCallbackGuard() {
+    sd_set_prompt_image_callback(ctx_, nullptr, nullptr);
+}
+
+bool validate_server_img_gen_request(const ServerRuntime& runtime,
+                                     const ImgGenJobRequest& request,
+                                     std::string& error_message) {
+    auto within_dimension_limit = [&](double value) {
+        if (!std::isfinite(value) || value > k_max_generation_dimension) {
+            error_message = "generation dimensions must not exceed " + std::to_string(k_max_generation_dimension);
+            return false;
+        }
+        return true;
+    };
+    const auto& params = request.gen_params;
+    if ((params.width && !within_dimension_limit(*params.width)) ||
+        (params.height && !within_dimension_limit(*params.height)))
+        return false;
+    if (params.hires_enabled.value_or(false)) {
+        const double width      = params.width.value_or(runtime.default_gen_params->width.value_or(512));
+        const double height     = params.height.value_or(runtime.default_gen_params->height.value_or(512));
+        const double scale      = params.hires_scale.value_or(2.f);
+        const auto target_width = params.hires_width.value_or(0), target_height = params.hires_height.value_or(0);
+        if (!within_dimension_limit(target_width > 0 ? target_width : target_height > 0 ? target_height
+                                                                                        : width * scale) ||
+            !within_dimension_limit(target_height > 0 ? target_height : target_width > 0 ? target_width
+                                                                                         : height * scale))
+            return false;
+    }
+    if ((!runtime.default_gen_params->ad_model_path.empty() && request.adetailer_enabled) || !request.adetailer_passes.empty()) {
+        error_message = "ADetailer requires a DGL script";
+        return false;
+    }
+    return true;
+}
 
 static std::string lower_ascii(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
@@ -22,7 +83,7 @@ static std::string lower_ascii(std::string value) {
 }
 
 static bool is_supported_model_ext(const fs::path& p) {
-    auto ext = lower_ascii(p.extension().string());
+    auto ext = lower_ascii(p.extension().u8string());
     return ext == ".gguf" || ext == ".pt" || ext == ".pth" || ext == ".safetensors";
 }
 
@@ -32,11 +93,18 @@ static const std::string k_base64_chars =
     "0123456789+/";
 
 std::string base64_encode(const std::vector<uint8_t>& bytes) {
+    return base64_encode(bytes.data(), bytes.size());
+}
+
+std::string base64_encode(const void* data, size_t size) {
     std::string ret;
-    int val  = 0;
-    int valb = -6;
-    for (uint8_t c : bytes) {
-        val = (val << 8) + c;
+    ret.reserve((size + 2) / 3 * 4);
+    uint32_t val      = 0;
+    int valb          = -6;
+    const auto* bytes = static_cast<const uint8_t*>(data);
+    for (size_t i = 0; i < size; ++i) {
+        const auto c = bytes[i];
+        val          = (val << 8) + c;
         valb += 8;
         while (valb >= 0) {
             ret.push_back(k_base64_chars[(val >> valb) & 0x3F]);
@@ -167,6 +235,9 @@ std::string video_mime_type(const std::string& output_format) {
 }
 
 bool runtime_supports_generation_mode(const ServerRuntime& runtime, SDMode mode) {
+    if (!has_current_model(runtime)) {
+        return false;
+    }
     if (mode == VID_GEN) {
         return sd_ctx_supports_video_generation(runtime.sd_ctx);
     }
@@ -176,14 +247,54 @@ bool runtime_supports_generation_mode(const ServerRuntime& runtime, SDMode mode)
     return true;
 }
 
+bool has_current_model(const ServerRuntime& runtime) {
+    return !runtime.ctx_params->model_path.empty() || !runtime.ctx_params->diffusion_model_path.empty();
+}
+
+bool generate_server_images(sd_ctx_t* ctx, ImgGenJobRequest& request, SDImageVec& results, std::string& error_message) {
+    auto params = request.to_image_opt();
+    PromptImageCallbackGuard prompt_images(ctx, request.gen_params);
+    sd_result_t* generated = nullptr;
+    if (!generate_sd_image(ctx, params, &generated)) {
+        error_message = sd_get_last_error();
+        if (error_message.empty())
+            error_message = "generate_image returned no results";
+        return false;
+    }
+    results.adopt(generated);
+    if (results.empty()) {
+        error_message = "generate_image returned no results";
+        return false;
+    }
+    return true;
+}
+
 std::string unsupported_generation_mode_error(SDMode mode) {
+    if (const auto* error = sd_get_last_error(); *error) {
+        return error;
+    }
     if (mode == VID_GEN) {
-        return "loaded model does not support vid_gen";
+        return "current model does not support vid_gen";
     }
     if (mode == IMG_GEN) {
-        return "loaded model does not support img_gen";
+        return "current model does not support img_gen";
     }
-    return "loaded model does not support requested mode";
+    return "current model does not support requested mode";
+}
+
+static int parse_weight_ttl(int argc, const char** argv, int index, int& ttl) {
+    if (index + 1 < argc) {
+        const std::string_view value = argv[index + 1];
+        const auto* end              = value.data() + value.size();
+        int seconds                  = 0;
+        const auto parsed            = std::from_chars(value.data(), end, seconds);
+        if (parsed.ec == std::errc{} && parsed.ptr == end && seconds >= -1) {
+            ttl = seconds;
+            return 1;
+        }
+    }
+    LOG_ERROR("%s expects an integer greater than or equal to -1", argv[index]);
+    return -1;
 }
 
 ArgOptions SDSvrParams::get_options() {
@@ -192,14 +303,24 @@ ArgOptions SDSvrParams::get_options() {
     options.string_options = {
         {"-l", "--listen-ip", "server listen ip (default: 127.0.0.1)", 0, &listen_ip},
         {"", "--serve-html-path", "path to HTML file to serve at root (optional)", 0, &serve_html_path},
+        {"", "--dgl-dir", "Web UI script directory (default: dgl)", 0, &dgl_dir},
+        {"", "--output-dir", "directory for DGL writes and output previews (default: <working directory>/output)", 0,
+         &output_dir},
     };
 
     options.int_options = {
         {"", "--listen-port", "server listen port (default: 1234)", &listen_port},
+        {"", "--max-pending-jobs",
+         "maximum number of pending async jobs (default: 64)",
+         &max_pending_jobs},
+        {"", "--completed-ttl-seconds",
+         "retention time for completed async jobs in seconds (default: 600)",
+         &completed_ttl_seconds},
     };
 
     options.bool_options = {
         {"", "--color", "colors the logging tags according to level", true, &color},
+        {"", "--no-media-view", "disable media file viewing", false, &media_view},
     };
 
     auto on_help_arg = [&](int, const char**, int, bool& valid) {
@@ -210,6 +331,23 @@ ArgOptions SDSvrParams::get_options() {
 
     options.manual_options = {
         {"-h", "--help", "show this help message and exit", on_help_arg},
+        {"", "--weight-staging-ttl",
+         "idle seconds before releasing GPU staging copies of RAM weights (-1 disabled, 0 immediate; default: -1)",
+         [this](int argc, const char** argv, int index) {
+             return parse_weight_ttl(argc, argv, index, weight_staging_ttl);
+         }},
+        {"", "--weight-residency-ttl",
+         "idle seconds before unloading model components from RAM and VRAM (-1 disabled, 0 immediate; default: -1)",
+         [this](int argc, const char** argv, int index) {
+             return parse_weight_ttl(argc, argv, index, weight_residency_ttl);
+         }},
+        {"", "--model-dir", "model root; repeat to search multiple directories (default: models)",
+         [this](int argc, const char** argv, int index) {
+             if (++index >= argc || argv[index][0] == '\0')
+                 return -1;
+             model_dirs.push_back(argv_to_utf8(index, argv));
+             return 1;
+         }},
     };
     add_log_options(options, log_level);
     return options;
@@ -226,18 +364,29 @@ bool SDSvrParams::validate() {
         return false;
     }
 
-    if (!serve_html_path.empty() && !fs::exists(serve_html_path)) {
+    if (max_pending_jobs <= 0) {
+        LOG_ERROR("error: max_pending_jobs must be greater than 0");
+        return false;
+    }
+
+    if (completed_ttl_seconds < 0) {
+        LOG_ERROR("error: completed_ttl_seconds must be non-negative");
+        return false;
+    }
+
+    if (!serve_html_path.empty() && !fs::exists(fs::u8path(serve_html_path))) {
         LOG_ERROR("error: serve_html_path file does not exist: %s", serve_html_path.c_str());
+        return false;
+    }
+    if (dgl_dir.empty()) {
+        LOG_ERROR("--dgl-dir requires a directory path");
         return false;
     }
     return true;
 }
 
 bool SDSvrParams::resolve_and_validate() {
-    if (!validate()) {
-        return false;
-    }
-    return true;
+    return validate() && load_api_keys();
 }
 
 std::string SDSvrParams::to_string() const {
@@ -246,72 +395,94 @@ std::string SDSvrParams::to_string() const {
         << "  log_level: " << log_level_name(log_level) << ",\n"
         << "  listen_ip: " << listen_ip << ",\n"
         << "  listen_port: \"" << listen_port << "\",\n"
+        << "  max_pending_jobs: " << max_pending_jobs << ",\n"
+        << "  completed_ttl_seconds: " << completed_ttl_seconds << ",\n"
+        << "  weight_staging_ttl: " << weight_staging_ttl << ",\n"
+        << "  weight_residency_ttl: " << weight_residency_ttl << ",\n"
         << "  serve_html_path: \"" << serve_html_path << "\",\n"
+        << "  dgl_dir: \"" << dgl_dir << "\",\n"
+        << "  api_keys: " << api_keys.size() << ",\n"
+        << "  cors_origins: " << cors_origins.size() << ",\n"
+        << "  media_view: " << std::boolalpha << media_view << ",\n"
         << "}";
     return oss.str();
 }
 
 void refresh_lora_cache(ServerRuntime& rt) {
     std::vector<LoraEntry> new_cache;
-
-    fs::path lora_dir = rt.ctx_params->lora_model_dir;
-    std::error_code ec;
-    if (fs::exists(lora_dir, ec) && !ec && fs::is_directory(lora_dir, ec) && !ec) {
-        try {
-            auto it = fs::recursive_directory_iterator(
-                lora_dir,
-                fs::directory_options::skip_permission_denied,
-                ec);
-            auto end = fs::recursive_directory_iterator();
-            while (!ec && it != end) {
-                std::error_code entry_ec;
-                bool is_reg = it->is_regular_file(entry_ec);
-                if (entry_ec || !is_reg) {
-                    it.increment(ec);
-                    continue;
+    std::vector<ModelRoot> directories;
+    if (!rt.ctx_params->lora_model_dir.empty()) {
+        directories.push_back(make_model_root(fs::u8path(rt.ctx_params->lora_model_dir), true));
+    } else {
+        for (const auto& root : get_model_roots(*rt.svr_params)) {
+            try {
+                const auto paths = model_category_directories(root, "loras");
+                for (size_t i = 0; i < paths.size(); ++i) {
+                    if (!model_path_inside(root.path, fs::canonical(paths[i]))) {
+                        LOG_WARN("LoRA directory escapes model directory: %s", paths[i].u8string().c_str());
+                        continue;
+                    }
+                    directories.push_back(make_model_root(paths[i], root.primary && lower_ascii(paths[i].filename().u8string()) == "loras"));
                 }
-                const fs::path& p = it->path();
-                if (!is_supported_model_ext(p)) {
-                    it.increment(ec);
-                    continue;
-                }
-
-                LoraEntry lora_entry;
-                lora_entry.name     = p.stem().u8string();
-                lora_entry.fullpath = p.u8string();
-                std::string rel     = p.lexically_relative(lora_dir).u8string();
-                std::replace(rel.begin(), rel.end(), '\\', '/');
-                lora_entry.path = rel;
-
-                new_cache.push_back(std::move(lora_entry));
-                it.increment(ec);
+            } catch (const std::exception& e) {
+                LOG_WARN("error while finding LoRA directories in %s: %s", root.label.c_str(), e.what());
             }
-        } catch (const std::exception& e) {
-            LOG_WARN("error while scanning lora directory '%s': %s", lora_dir.string().c_str(), e.what());
-            return;
         }
     }
-
-    if (ec) {
-        LOG_WARN("error while scanning lora directory '%s': %s", lora_dir.string().c_str(), ec.message().c_str());
-        return;
+    std::set<std::string> seen;
+    std::map<std::string, size_t> names;
+    for (const auto& directory : directories) {
+        try {
+            if (!fs::exists(directory.path))
+                continue;
+            for (fs::recursive_directory_iterator it(directory.path), end; it != end; ++it) {
+                std::error_code ec;
+                const auto canonical = fs::canonical(it->path(), ec);
+                if (ec || !model_path_inside(directory.path, canonical)) {
+                    it.disable_recursion_pending();
+                    LOG_WARN("skipping inaccessible LoRA or path outside LoRA directory: %s", it->path().u8string().c_str());
+                    continue;
+                }
+                const auto ext = lower_ascii(it->path().extension().u8string());
+                if (!it->is_regular_file() || (!is_supported_model_ext(it->path()) && ext != ".ckpt" && ext != ".sft") ||
+                    !seen.insert(model_path_key(canonical)).second)
+                    continue;
+                const auto relative = it->path().lexically_relative(directory.path).generic_u8string();
+                LoraEntry entry;
+                entry.name         = it->path().stem().u8string();
+                entry.path         = directory.primary ? relative : directory.id + "/" + relative;
+                entry.fullpath     = it->path().u8string();
+                entry.display_path = relative;
+                entry.root         = directory.path;
+                ++names[relative];
+                new_cache.push_back(std::move(entry));
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("error while scanning LoRA directory '%s': %s", directory.path.u8string().c_str(), e.what());
+        }
     }
-
+    for (auto& entry : new_cache) {
+        if (names[entry.display_path] > 1)
+            entry.display_path = fs::u8path(entry.fullpath).generic_u8string();
+    }
     std::sort(new_cache.begin(), new_cache.end(), [](const LoraEntry& a, const LoraEntry& b) {
         return a.path < b.path;
     });
-
-    {
-        std::lock_guard<std::mutex> lock(*rt.lora_mutex);
-        *rt.lora_cache = std::move(new_cache);
-    }
+    std::lock_guard<std::mutex> lock(*rt.lora_mutex);
+    *rt.lora_cache = std::move(new_cache);
 }
 
 std::string get_lora_full_path(ServerRuntime& rt, const std::string& path) {
     std::lock_guard<std::mutex> lock(*rt.lora_mutex);
     auto it = std::find_if(rt.lora_cache->begin(), rt.lora_cache->end(),
                            [&](const LoraEntry& entry) { return entry.path == path; });
-    return it != rt.lora_cache->end() ? it->fullpath : "";
+    if (it == rt.lora_cache->end())
+        return "";
+    std::error_code ec;
+    const auto canonical = fs::canonical(fs::u8path(it->fullpath), ec);
+    if (ec || !model_path_inside(it->root, canonical) || !fs::is_regular_file(canonical, ec) || ec)
+        return "";
+    return canonical.u8string();
 }
 
 void refresh_upscaler_cache(ServerRuntime& rt) {
@@ -322,7 +493,7 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
         previous_cache = *rt.upscaler_cache;
     }
 
-    fs::path upscaler_dir = rt.ctx_params->hires_upscalers_dir;
+    fs::path upscaler_dir = fs::u8path(rt.ctx_params->hires_upscalers_dir);
     std::error_code ec;
     if (fs::exists(upscaler_dir, ec) && !ec && fs::is_directory(upscaler_dir, ec) && !ec) {
         try {
@@ -333,23 +504,22 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
             auto end = fs::directory_iterator();
             while (!ec && it != end) {
                 std::error_code entry_ec;
-                bool is_reg = it->is_regular_file(entry_ec);
-                if (!entry_ec && it->is_directory(entry_ec)) {
-                    const fs::path& path = it->path();
+                const auto& path = it->path();
+                if (it->is_directory(entry_ec)) {
                     if (fs::is_regular_file(path / "transformer" / "config.json", entry_ec)) {
-                        UpscalerEntry entry;
-                        entry.name = entry.path    = path.filename().u8string();
-                        entry.fullpath             = fs::absolute(path).lexically_normal().u8string();
-                        entry.image_upscale_factor = get_upscaler_model_scale(entry.fullpath.c_str());
-                        if (entry.image_upscale_factor > 0) {
+                        UpscalerEntry entry{};
+                        entry.path = entry.name = path.filename().u8string();
+                        entry.fullpath          = fs::absolute(path).lexically_normal().u8string();
+                        entry.scale             = sd_upscaler_probe_scale(entry.fullpath.c_str());
+                        if (entry.scale > 0) {
                             entry.model_name = "Kandinsky ImageSR 2.0";
-                            entry.scale      = entry.image_upscale_factor;
                             new_cache.push_back(std::move(entry));
                         }
                     }
                     it.increment(ec);
                     continue;
                 }
+                bool is_reg = it->is_regular_file(entry_ec);
                 if (entry_ec || !is_reg) {
                     it.increment(ec);
                     continue;
@@ -363,10 +533,9 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
                 UpscalerEntry upscaler_entry;
                 upscaler_entry.name = p.stem().u8string();
                 std::error_code abs_ec;
-                fs::path abs_path         = fs::absolute(p, abs_ec);
-                upscaler_entry.fullpath   = (abs_ec ? p : abs_path.lexically_normal()).u8string();
-                upscaler_entry.model_name = "ESRGAN_4x";
-                upscaler_entry.path       = p.filename().u8string();
+                fs::path abs_path       = fs::absolute(p, abs_ec);
+                upscaler_entry.fullpath = (abs_ec ? p : abs_path.lexically_normal()).u8string();
+                upscaler_entry.path     = p.filename().u8string();
 
                 std::error_code size_ec;
                 upscaler_entry.file_size = it->file_size(size_ec);
@@ -376,31 +545,27 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
                 }
 
                 std::error_code time_ec;
-                upscaler_entry.last_modified        = it->last_write_time(time_ec);
-                auto previous                       = std::find_if(previous_cache.begin(), previous_cache.end(), [&](const UpscalerEntry& cached) {
+                upscaler_entry.last_modified = it->last_write_time(time_ec);
+                auto previous                = std::find_if(previous_cache.begin(), previous_cache.end(), [&](const UpscalerEntry& cached) {
                     return cached.fullpath == upscaler_entry.fullpath &&
                            cached.file_size == upscaler_entry.file_size &&
                            (!time_ec && cached.last_modified == upscaler_entry.last_modified);
                 });
-                upscaler_entry.image_upscale_factor = previous != previous_cache.end()
-                                                          ? previous->image_upscale_factor
-                                                          : get_upscaler_model_scale(upscaler_entry.fullpath.c_str());
-                if (upscaler_entry.image_upscale_factor > 0) {
-                    upscaler_entry.scale      = upscaler_entry.image_upscale_factor;
-                    upscaler_entry.model_name = "ESRGAN_" + std::to_string(upscaler_entry.scale) + "x";
-                }
+                const int scale              = previous != previous_cache.end() ? previous->scale : sd_upscaler_probe_scale(upscaler_entry.fullpath.c_str());
+                upscaler_entry.scale         = scale > 0 ? scale : 4;
+                upscaler_entry.model_name    = "ESRGAN_" + std::to_string(upscaler_entry.scale) + "x";
 
                 new_cache.push_back(std::move(upscaler_entry));
                 it.increment(ec);
             }
         } catch (const std::exception& e) {
-            LOG_WARN("error while scanning upscalers directory '%s': %s", upscaler_dir.string().c_str(), e.what());
+            LOG_WARN("error while scanning upscalers directory '%s': %s", upscaler_dir.u8string().c_str(), e.what());
             return;
         }
     }
 
     if (ec) {
-        LOG_WARN("error while scanning upscalers directory '%s': %s", upscaler_dir.string().c_str(), ec.message().c_str());
+        LOG_WARN("error while scanning upscalers directory '%s': %s", upscaler_dir.u8string().c_str(), ec.message().c_str());
         return;
     }
 
@@ -414,8 +579,8 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
     }
 }
 
-int64_t unix_timestamp_now() {
-    return std::chrono::duration_cast<std::chrono::seconds>(
+int64_t unix_timestamp_now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::system_clock::now().time_since_epoch())
         .count();
 }

@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "id": "ovis-image",
+  "name": "Ovis Image",
+  "model_url": "https://huggingface.co/ATH-MaaS/Ovis-Image-7B",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Ovis 2.5 Text Encoder"
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "cfg_scale": 5,
+    "steps": 20,
+    "width": 1024,
+    "height": 1024,
+    "sampling_method": "euler"
+  },
+  "features": [
+    "flow_shift",
+    "slg"
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "id": "flux1-depth",
+  "name": "FLUX.1 Depth dev",
+  "description": "Select Depth weights and supply a precomputed depth map as Control Image. Depth estimation is not performed by this recipe.",
+  "model_url": "https://huggingface.co/black-forest-labs/FLUX.1-Depth-dev",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "clip_l",
+      "required": true
+    },
+    {
+      "id": "t5xxl",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "sampling_method": "euler",
+    "distilled_guidance": 10,
+    "scheduler": "flux",
+    "cfg_scale": 1,
+    "steps": 20,
+    "width": 1024,
+    "height": 1024
+  },
+  "features": [
+    "clip_skip",
+    "distilled_guidance",
+    "flow_shift",
+    "slg",
+    "control_image"
+  ],
+  "disabled_features": [
+    "mask_image"
+  ]
+}

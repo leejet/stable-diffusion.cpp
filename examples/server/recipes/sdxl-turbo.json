@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "sdxl-turbo",
+  "name": "SDXL Turbo",
+  "size_multiple": 64,
+  "model_url": "https://huggingface.co/stabilityai/sdxl-turbo",
+  "slots": [
+    {
+      "id": "model",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "defaults": {
+    "cfg_scale": 1,
+    "steps": 1,
+    "width": 512,
+    "height": 512
+  },
+  "features": [
+    "cache_unet",
+    "clip_skip",
+    "shifted_timestep"
+  ],
+  "disabled_features": [
+    "cache_dit"
+  ]
+}

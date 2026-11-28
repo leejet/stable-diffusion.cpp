@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "id": "ernie-image",
+  "name": "ERNIE Image",
+  "size_multiple": 16,
+  "model_url": "https://huggingface.co/baidu/ERNIE-Image",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Ministral 3 3B Text Encoder"
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "cfg_scale": 4,
+    "steps": 20,
+    "width": 1024,
+    "height": 1024,
+    "sampling_method": "euler"
+  },
+  "features": [
+    "flow_shift"
+  ]
+}

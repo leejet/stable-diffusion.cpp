@@ -1,20 +1,27 @@
 #include "core/ggml_extend_backend.h"
+#include "core/ggml_extensions.h"
 
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #ifdef SD_USE_CUDA
 #include <cuda.h>
 #endif
 
+#ifdef SD_USE_HIP
+#include <hip/hip_runtime_api.h>
+#endif
+
+#include "core/ggml_compat.h"
 #include "core/util.h"
-#include "ggml-backend-impl.h"
-#include "ggml-impl.h"
 #include "stable-diffusion.h"
 
 static std::string trim_copy(const std::string& value) {
@@ -290,6 +297,10 @@ bool add_rpc_devices(const std::string& servers) {
     }
     ggml_backend_reg_t rpc_reg = ggml_backend_reg_by_name("RPC");
     if (!rpc_reg) {
+        ggml_backend_load_all();
+        rpc_reg = ggml_backend_reg_by_name("RPC");
+    }
+    if (!rpc_reg) {
         LOG_ERROR("RPC backend not found, cannot add RPC servers");
         return false;
     }
@@ -302,10 +313,17 @@ bool add_rpc_devices(const std::string& servers) {
     for (const auto& server : rpc_servers) {
         LOG_INFO("Adding RPC server: %s", server.c_str());
         auto reg = ggml_backend_rpc_add_server_fn(server.c_str());
-        // no return value to check for success but should print errors from the RPC backend if it fails to add the server
+        if (!reg) {
+            LOG_ERROR("failed to add RPC server: %s", server.c_str());
+            return false;
+        }
         ggml_backend_register(reg);
     }
     return true;
+}
+
+bool sd_add_rpc_servers(const char* servers) {
+    return add_rpc_devices(servers ? servers : "");
 }
 
 static void ggml_backend_load_all_once() {
@@ -338,6 +356,16 @@ bool sd_backend_is(ggml_backend_t backend, const std::string& name) {
     }
     std::string dev_name = ggml_backend_dev_name(dev);
     return lower_copy(dev_name).find(lower_copy(name)) != std::string::npos;
+}
+
+bool sd_backend_is_cuda_family(ggml_backend_t backend) {
+    const auto dev = backend != nullptr ? ggml_backend_get_device(backend) : nullptr;
+    const auto reg = dev != nullptr ? ggml_backend_dev_backend_reg(dev) : nullptr;
+    if (reg == nullptr) {
+        return false;
+    }
+    const char* name = ggml_backend_reg_name(reg);
+    return std::strcmp(name, "CUDA") == 0 || std::strcmp(name, "ROCm") == 0 || std::strcmp(name, "MUSA") == 0;
 }
 
 static std::string get_default_backend_name() {
@@ -431,44 +459,38 @@ bool sd_backend_is_cpu(ggml_backend_t backend) {
         return false;
     }
     auto dev = ggml_backend_get_device(backend);
-    return dev != nullptr && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
-}
-
-ggml_backend_buffer_t sd_backend_dev_buffer_from_host_ptr(ggml_backend_dev_t device,
-                                                          void* ptr,
-                                                          size_t size,
-                                                          size_t max_tensor_size) {
-    ggml_backend_buffer_t buffer = ggml_backend_dev_buffer_from_host_ptr(device, ptr, size, max_tensor_size);
-    if (buffer != nullptr && buffer->context == nullptr) {
-        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(device);
-        if (reg != nullptr && std::strcmp(ggml_backend_reg_name(reg), "Metal") == 0) {
-            // Metal can wrap a failed mapping in a non-null buffer. Its free callback also
-            // dereferences the missing context, so only release the outer buffer.
-            buffer->iface.free_buffer = nullptr;
-            ggml_backend_buffer_free(buffer);
-            return nullptr;
-        }
-    }
-    return buffer;
-}
-
-bool sd_backend_supports_cuda_mma(ggml_backend_t backend) {
-#ifdef SD_USE_CUDA
-    if (!sd_backend_is(backend, "CUDA")) {
-        return false;
-    }
-    auto dev = ggml_backend_get_device(backend);
     if (dev == nullptr) {
         return false;
     }
+    // ggml_backend_dev_type() can query the driver on every call (CUDA reads all device
+    // properties), and this check runs inside per-tensor residency loops.
     static std::mutex mutex;
-    static std::unordered_map<ggml_backend_dev_t, bool> cache;
+    static std::unordered_map<ggml_backend_dev_t, bool> is_cpu_by_device;
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = is_cpu_by_device.find(dev);
+    if (it == is_cpu_by_device.end()) {
+        it = is_cpu_by_device.emplace(dev, ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU).first;
+    }
+    return it->second;
+}
+
+static int cuda_compiled_arch(ggml_backend_t backend) {
+#ifdef SD_USE_CUDA
+    if (!sd_backend_is(backend, "CUDA")) {
+        return 0;
+    }
+    auto dev = ggml_backend_get_device(backend);
+    if (dev == nullptr) {
+        return 0;
+    }
+    static std::mutex mutex;
+    static std::unordered_map<ggml_backend_dev_t, int> cache;
     std::lock_guard<std::mutex> lock(mutex);
     auto it = cache.find(dev);
     if (it != cache.end()) {
         return it->second;
     }
-    const bool supported = [&]() {
+    const int arch = [&]() {
         ggml_backend_dev_props props{};
         ggml_backend_dev_get_props(dev, &props);
         CUdevice device;
@@ -477,13 +499,13 @@ bool sd_backend_supports_cuda_mma(ggml_backend_t backend) {
             cuDeviceGetByPCIBusId(&device, props.device_id) != CUDA_SUCCESS ||
             cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device) != CUDA_SUCCESS ||
             cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device) != CUDA_SUCCESS) {
-            return false;
+            return 0;
         }
         auto reg          = ggml_backend_dev_backend_reg(dev);
         auto get_features = reinterpret_cast<ggml_backend_get_features_t>(
             ggml_backend_reg_get_proc_address(reg, "ggml_backend_get_features"));
         if (get_features == nullptr) {
-            return false;
+            return 0;
         }
         // Match ggml's highest compiled architecture for this device, including PTX fallback.
         const int cc      = 100 * major + 10 * minor;
@@ -506,19 +528,83 @@ bool sd_backend_supports_cuda_mma(ggml_backend_t backend) {
                 arch = end;
             }
         }
-        return compiled_arch == 700 || compiled_arch >= 750;
+        return compiled_arch;
     }();
-    cache.emplace(dev, supported);
-    return supported;
+    cache.emplace(dev, arch);
+    return arch;
+#else
+    (void)backend;
+    return 0;
+#endif
+}
+
+bool sd_backend_supports_cuda_mma(ggml_backend_t backend) {
+    const int arch = cuda_compiled_arch(backend);
+    return arch == 700 || arch >= 750;
+}
+
+bool sd_backend_supports_hip_mma(ggml_backend_t backend) {
+#ifdef SD_USE_HIP
+    if (!sd_backend_is(backend, "ROCm")) {
+        return false;
+    }
+    auto dev = ggml_backend_get_device(backend);
+    if (dev == nullptr) {
+        return false;
+    }
+    ggml_backend_dev_props props{};
+    ggml_backend_dev_get_props(dev, &props);
+    int device = 0;
+    hipDeviceProp_t hip_props{};
+    if (props.device_id == nullptr ||
+        hipDeviceGetByPCIBusId(&device, props.device_id) != hipSuccess ||
+        hipGetDeviceProperties(&hip_props, device) != hipSuccess) {
+        return false;
+    }
+    const char* arch = hip_props.gcnArchName;
+    if (std::strncmp(arch, "gfx", 3) != 0) {
+        return false;
+    }
+    char* end        = nullptr;
+    const long value = std::strtol(arch + 3, &end, 16);
+    if (end == arch + 3 || (*end != '\0' && *end != ':')) {
+        return false;
+    }
+    // Match the HIP FA kernels; keep unknown architecture families on the probe path.
+    if (value >= 0x1100 && value < 0x1300) {
+        return true;
+    }
+#ifdef SD_HIP_MFMA
+    return value == 0x908 || value == 0x90a ||
+           value == 0x940 || value == 0x941 || value == 0x942 || value == 0x950;
+#else
+    return false;
+#endif
 #else
     (void)backend;
     return false;
 #endif
 }
 
+bool sd_backend_supports_conv_implicit_gemm(ggml_backend_t backend, bool conv3d) {
+    if (backend == nullptr) {
+        return false;
+    }
+    if (sd_backend_is(backend, "Vulkan") || sd_backend_is(backend, "MUSA")) {
+        return true;
+    }
+    // CUDA/HIP Conv3d also implements SIMT implicit GEMM; Conv2d requires MMA.
+    if (conv3d) {
+        return sd_backend_is(backend, "CUDA") || sd_backend_is(backend, "ROCm");
+    }
+    return cuda_compiled_arch(backend) >= 750 || sd_backend_supports_hip_mma(backend);
+}
+
 ggml_backend_t sd_backend_cpu_init() {
     ggml_backend_load_all_once();
-    return ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+    auto backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+    sd_ggml_register_extensions(backend);
+    return backend;
 }
 
 bool sd_backend_cpu_set_n_threads(ggml_backend_t backend, int n_threads) {
@@ -537,66 +623,63 @@ bool sd_backend_cpu_set_n_threads(ggml_backend_t backend, int n_threads) {
     return false;
 }
 
-static ggml_cgraph sd_ggml_graph_view(ggml_cgraph* cgraph0, int i0, int i1) {
-    ggml_cgraph cgraph = {
-        /*.size             =*/0,
-        /*.n_nodes          =*/i1 - i0,
-        /*.n_leafs          =*/0,
-        /*.nodes            =*/cgraph0->nodes + i0,
-        /*.grads            =*/nullptr,
-        /*.grad_accs        =*/nullptr,
-        /*.leafs            =*/nullptr,
-        /*.use_counts       =*/cgraph0->use_counts,
-        /*.visited_hash_set =*/cgraph0->visited_hash_set,
-        /*.order            =*/cgraph0->order,
-        /*.uid              =*/0,
-    };
-    return cgraph;
+void sd_backend_set_buffer_cache_enabled(ggml_backend_t backend, bool enabled) {
+    auto dev = backend != nullptr ? ggml_backend_get_device(backend) : nullptr;
+    if (dev == nullptr) {
+        return;
+    }
+    auto reg                    = ggml_backend_dev_backend_reg(dev);
+    using SetBufferCacheEnabled = void (*)(ggml_backend_t, bool);
+    auto fn                     = reinterpret_cast<SetBufferCacheEnabled>(ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_buffer_cache_enabled"));
+    if (fn != nullptr) {
+        fn(backend, enabled);
+    }
 }
 
-ggml_status sd_backend_graph_compute_with_eval_callback(ggml_backend_t backend,
-                                                        ggml_cgraph* gf,
-                                                        sd_graph_eval_callback_t callback_eval,
-                                                        void* callback_eval_user_data) {
-    if (callback_eval == nullptr) {
-        return ggml_backend_graph_compute(backend, gf);
+void sd_backend_clear_buffer_cache(ggml_backend_t backend) {
+    auto dev = backend != nullptr ? ggml_backend_get_device(backend) : nullptr;
+    if (dev == nullptr) {
+        return;
     }
-
-    ggml_status status = GGML_STATUS_SUCCESS;
-    const int n_nodes  = ggml_graph_n_nodes(gf);
-    bool stopped       = false;
-
-    for (int j0 = 0; j0 < n_nodes; ++j0) {
-        ggml_tensor* t = ggml_graph_node(gf, j0);
-        bool need      = callback_eval(t, true, callback_eval_user_data);
-        int j1         = j0;
-
-        while (!need && j1 < n_nodes - 1) {
-            t    = ggml_graph_node(gf, ++j1);
-            need = callback_eval(t, true, callback_eval_user_data);
-        }
-
-        ggml_cgraph gv = sd_ggml_graph_view(gf, j0, j1 + 1);
-        status         = ggml_backend_graph_compute_async(backend, &gv);
-        if (status != GGML_STATUS_SUCCESS) {
-            break;
-        }
-
-        ggml_backend_synchronize(backend);
-
-        if (need && !callback_eval(t, false, callback_eval_user_data)) {
-            stopped = true;
-            break;
-        }
-
-        j0 = j1;
+    auto reg               = ggml_backend_dev_backend_reg(dev);
+    using ClearBufferCache = void (*)(ggml_backend_t);
+    auto fn                = reinterpret_cast<ClearBufferCache>(ggml_backend_reg_get_proc_address(reg, "ggml_backend_clear_buffer_cache"));
+    if (fn != nullptr) {
+        fn(backend);
     }
+}
 
-    ggml_backend_synchronize(backend);
-    if (stopped && status == GGML_STATUS_SUCCESS) {
-        status = GGML_STATUS_ABORTED;
+bool sd_backend_get_buffer_cache_memory(ggml_backend_dev_t device, size_t& free_bytes, size_t& total_bytes, size_t& cached_bytes) {
+    auto reg                   = ggml_backend_dev_backend_reg(device);
+    using GetBufferCacheMemory = void (*)(ggml_backend_dev_t, size_t*, size_t*, size_t*);
+    auto fn                    = reinterpret_cast<GetBufferCacheMemory>(ggml_backend_reg_get_proc_address(reg, "ggml_backend_get_buffer_cache_memory"));
+    if (fn == nullptr) {
+        ggml_backend_dev_memory(device, &free_bytes, &total_bytes);
+        cached_bytes = 0;
+        return false;
     }
-    return status;
+    fn(device, &free_bytes, &total_bytes, &cached_bytes);
+    return true;
+}
+
+void sd_backend_set_buffer_cache_limit(ggml_backend_dev_t device, size_t bytes) {
+    auto reg                  = ggml_backend_dev_backend_reg(device);
+    using SetBufferCacheLimit = void (*)(ggml_backend_dev_t, size_t);
+    auto fn                   = reinterpret_cast<SetBufferCacheLimit>(ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_buffer_cache_limit"));
+    if (fn != nullptr) {
+        fn(device, bytes);
+    }
+}
+
+ggml_backend_buffer_t sd_backend_try_alloc_buffer_from_cache(ggml_backend_buffer_type_t buft, size_t bytes) {
+    auto device = ggml_backend_buft_get_device(buft);
+    if (device == nullptr) {
+        return nullptr;
+    }
+    auto reg                      = ggml_backend_dev_backend_reg(device);
+    using TryAllocBufferFromCache = ggml_backend_buffer_t (*)(ggml_backend_buffer_type_t, size_t);
+    auto fn                       = reinterpret_cast<TryAllocBufferFromCache>(ggml_backend_reg_get_proc_address(reg, "ggml_backend_try_alloc_buffer_from_cache"));
+    return fn != nullptr ? fn(buft, bytes) : nullptr;
 }
 
 const char* sd_get_system_info() {
@@ -734,6 +817,91 @@ bool sd_parse_backend_assignment(const std::string& spec, SDBackendAssignment* a
     return true;
 }
 
+static bool parse_operation_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error, bool convolution) {
+    const std::string operation = convolution ? "direct convolution" : "flash attention";
+    if (assignment == nullptr) {
+        return false;
+    }
+    SDBackendAssignment result;
+    result.set_default("auto");
+    std::istringstream stream(spec);
+    std::string part;
+    while (std::getline(stream, part, ',')) {
+        SDBackendAssignment entry;
+        if (!sd_parse_backend_assignment(part, &entry, error)) {
+            return false;
+        }
+        auto valid_mode = [&](const std::string& mode) {
+            if (mode == "on" || mode == "off" || mode == "auto") {
+                return true;
+            }
+            if (error != nullptr) {
+                *error = "invalid " + operation + " mode '" + mode + "': expected on, off, or auto";
+            }
+            return false;
+        };
+        if (!entry.default_name.empty()) {
+            if (!valid_mode(entry.default_name)) {
+                return false;
+            }
+            result.set_default(entry.default_name);
+        }
+        for (const auto& setting : entry.module_names) {
+            switch (setting.first) {
+                case SDBackendModule::DIFFUSION:
+                case SDBackendModule::VAE:
+                case SDBackendModule::CONTROL_NET:
+                    break;
+                case SDBackendModule::TE:
+                case SDBackendModule::CLIP_VISION:
+                case SDBackendModule::AUDIO_ENCODER:
+                    if (!convolution) {
+                        break;
+                    }
+                    [[fallthrough]];
+                default:
+                    if (error != nullptr) {
+                        *error = operation + " is not configurable for module '" + sd_backend_module_name(setting.first) + "'";
+                    }
+                    return false;
+            }
+            if (!valid_mode(setting.second)) {
+                return false;
+            }
+            result.set_module(setting.first, setting.second);
+        }
+    }
+    *assignment = std::move(result);
+    return true;
+}
+
+bool sd_parse_flash_attention_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error) {
+    return parse_operation_assignment(spec, assignment, error, false);
+}
+
+bool sd_parse_conv_direct_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error) {
+    return parse_operation_assignment(spec, assignment, error, true);
+}
+
+bool sd_parse_linear_type_assignment(const std::string& spec, SDBackendAssignment* assignment, std::string* error) {
+    if (!sd_parse_backend_assignment(spec, assignment, error)) {
+        return false;
+    }
+    const auto valid_mode = [](const std::string& mode) {
+        return mode == "auto" || mode == "i8" || mode == "raw";
+    };
+    if (assignment->empty() ||
+        (!assignment->default_name.empty() && !valid_mode(assignment->default_name)) ||
+        !std::all_of(assignment->module_names.begin(), assignment->module_names.end(),
+                     [&](const auto& entry) { return valid_mode(entry.second); })) {
+        if (error) {
+            *error = "linear_type expects auto, i8, raw, or module assignments such as dit=i8";
+        }
+        return false;
+    }
+    return true;
+}
+
 bool SDBackendAssignment::empty() const {
     return default_name.empty() && module_names.empty();
 }
@@ -789,6 +957,15 @@ static std::string primary_device_name(const std::string& value) {
 
 ggml_backend_t SDBackendManager::runtime_backend(SDBackendModule module) {
     return init_cached_backend(primary_device_name(runtime_assignment_.get(module)));
+}
+
+ggml_backend_t SDBackendManager::existing_backend(ggml_backend_dev_t device) const {
+    const auto& backends = shared_backends_ ? *shared_backends_ : backends_;
+    for (const auto& entry : backends) {
+        if (ggml_backend_get_device(entry.second.get()) == device)
+            return entry.second.get();
+    }
+    return nullptr;
 }
 
 std::vector<ggml_backend_t> SDBackendManager::runtime_backends(SDBackendModule module) {
@@ -1005,13 +1182,14 @@ bool SDBackendManager::validate(std::string* error) const {
 }
 
 ggml_backend_t SDBackendManager::init_cached_backend(const std::string& name) {
+    auto& backends         = shared_backends_ ? *shared_backends_ : backends_;
     std::string resolved   = sd_backend_resolve_name(name);
     std::string key        = lower_copy(resolved);
     ggml_backend_t backend = nullptr;
 
     if (!key.empty()) {
-        auto it = backends_.find(key);
-        if (it != backends_.end()) {
+        auto it = backends.find(key);
+        if (it != backends.end()) {
             return it->second.get();
         }
     } else if (!is_default_backend_token(name)) {
@@ -1030,14 +1208,15 @@ ggml_backend_t SDBackendManager::init_cached_backend(const std::string& name) {
         actual_key = !key.empty() ? key : lower_copy(trim_copy(name));
     }
 
-    auto it = backends_.find(actual_key);
-    if (it != backends_.end()) {
+    auto it = backends.find(actual_key);
+    if (it != backends.end()) {
         ggml_backend_free(backend);
         return it->second.get();
     }
 
     SDBackendHandle handle(backend);
-    backends_.emplace(actual_key, std::move(handle));
+    sd_ggml_register_extensions(backend);
+    backends.emplace(actual_key, std::move(handle));
     return backend;
 }
 

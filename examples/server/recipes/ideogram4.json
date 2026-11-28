@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "id": "ideogram4",
+  "name": "Ideogram 4",
+  "size_multiple": 16,
+  "description": "Select the matching unconditional transformer for classifier-free guidance.",
+  "model_url": "https://huggingface.co/ideogram-ai/ideogram-4-fp8",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "uncond_diffusion_model",
+      "required": true
+    },
+    {
+      "id": "llm",
+      "required": true,
+      "label": "Qwen 3 VL 8B Text Encoder"
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "defaults": {
+    "cfg_scale": 7,
+    "steps": 20,
+    "width": 1024,
+    "height": 1024,
+    "sampling_method": "euler"
+  },
+  "features": [
+    "flow_shift"
+  ]
+}

@@ -1,6 +1,9 @@
 #ifndef __SD_MODEL_VAE_VAE_HPP__
 #define __SD_MODEL_VAE_VAE_HPP__
 
+#include "config.h"
+#include "model/vae/geometry.hpp"
+
 #include <cmath>
 #include <limits>
 
@@ -9,6 +12,10 @@
 #include "model/vae/vae_tiling.hpp"
 #include "model_manager.h"
 #include "runtime/tiling.h"
+
+enum class VAEPosterior { ModelDefault,
+                          Sample,
+                          Mode };
 
 struct VAE : public GGMLRunner {
 protected:
@@ -82,7 +89,7 @@ protected:
     sd::Tensor<float> compute_with_temporal_tiling(const int n_threads,
                                                    const sd::Tensor<float>& input,
                                                    VAETemporalDirection direction,
-                                                   const sd_tiling_params_t& tiling_params) {
+                                                   const sd::TilingConfig& tiling_params) {
         if (!tiling_params.temporal_tiling || input.dim() != 5 || input.shape()[2] <= 1) {
             return _compute(n_threads, input, direction == VAETemporalDirection::DECODE);
         }
@@ -126,7 +133,7 @@ protected:
                                     bool circular_x,
                                     bool circular_y,
                                     bool decode_graph,
-                                    const sd_tiling_params_t& tiling_params,
+                                    const sd::TilingConfig& tiling_params,
                                     const char* error_message,
                                     bool silent = false) {
         auto on_processing = [&](const sd::Tensor<float>& input_tile) {
@@ -173,17 +180,7 @@ public:
         : version(version), weight_prefix(weight_prefix), GGMLRunner(backend, weight_manager) {}
 
     int get_scale_factor() {
-        int scale_factor = 8;
-        if (version == VERSION_LTXAV) {
-            scale_factor = 32;
-        } else if (version == VERSION_WAN2_2_TI2V || version == VERSION_QWEN_IMAGE_2_1 || sd_version_is_hunyuan_video(version) || sd_version_is_mage_flow(version) || sd_version_is_minimax_h3(version)) {
-            scale_factor = 16;
-        } else if (sd_version_uses_flux2_vae(version)) {
-            scale_factor = 16;
-        } else if (version == VERSION_CHROMA_RADIANCE || version == VERSION_HIDREAM_O1 || sd_version_is_minit2i(version) || sd_version_is_sensenova_u1(version)) {
-            scale_factor = 1;
-        }
-        return scale_factor;
+        return sd::vae::spatial_scale(version);
     }
 
     virtual int get_encoder_output_channels(int input_channels) = 0;
@@ -192,14 +189,14 @@ public:
         return supports_temporal_tiling(VAETemporalDirection::DECODE);
     }
 
-    virtual sd_tiling_params_t resolve_tiling_params(sd_tiling_params_t params) const {
+    virtual sd::TilingConfig resolve_tiling_params(sd::TilingConfig params) const {
         return params;
     }
 
     bool get_tile_sizes(int& tile_size_w,
                         int& tile_size_h,
                         float& tile_overlap,
-                        const sd_tiling_params_t& params,
+                        const sd::TilingConfig& params,
                         int64_t latent_w,
                         int64_t latent_h) {
         const auto tiling = resolve_tiling_params(params);
@@ -238,9 +235,18 @@ public:
 
     virtual sd::Tensor<float> encode(int n_threads,
                                      const sd::Tensor<float>& x,
-                                     sd_tiling_params_t tiling_params,
+                                     sd::TilingConfig tiling_params,
                                      bool circular_x = false,
                                      bool circular_y = false) {
+        return encode(n_threads, x, tiling_params, circular_x, circular_y, true);
+    }
+
+    sd::Tensor<float> encode(int n_threads,
+                             const sd::Tensor<float>& x,
+                             sd::TilingConfig tiling_params,
+                             bool circular_x,
+                             bool circular_y,
+                             bool auto_end) {
         int64_t t0              = ggml_time_ms();
         tiling_params           = resolve_tiling_params(tiling_params);
         sd::Tensor<float> input = x;
@@ -280,7 +286,9 @@ public:
                                                   tiling_params);
         }
 
-        runner_end();
+        if (auto_end) {
+            runner_end();
+        }
 
         if (output.empty()) {
             LOG_ERROR("vae encode compute failed");
@@ -293,11 +301,22 @@ public:
 
     virtual sd::Tensor<float> decode(int n_threads,
                                      const sd::Tensor<float>& x,
-                                     sd_tiling_params_t tiling_params,
+                                     sd::TilingConfig tiling_params,
                                      bool decode_video = false,
                                      bool circular_x   = false,
                                      bool circular_y   = false,
                                      bool silent       = false) {
+        return decode(n_threads, x, tiling_params, decode_video, circular_x, circular_y, silent, true);
+    }
+
+    sd::Tensor<float> decode(int n_threads,
+                             const sd::Tensor<float>& x,
+                             sd::TilingConfig tiling_params,
+                             bool decode_video,
+                             bool circular_x,
+                             bool circular_y,
+                             bool silent,
+                             bool auto_end) {
         int64_t t0              = ggml_time_ms();
         tiling_params           = resolve_tiling_params(tiling_params);
         sd::Tensor<float> input = x;
@@ -338,7 +357,9 @@ public:
                                                   tiling_params);
         }
 
-        runner_end();
+        if (auto_end) {
+            runner_end();
+        }
 
         if (output.empty()) {
             LOG_ERROR("vae decode compute failed");
@@ -348,14 +369,17 @@ public:
             scale_tensor_to_0_1(&output);
         }
         int64_t t1 = ggml_time_ms();
-        LOG_VERBOSE("computing vae decode graph completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
+        LOG_INFO("computing vae decode graph completed, taking %.2fs", (t1 - t0) * 1.0f / 1000);
         return std::move(output);
     }
 
-    virtual sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng) = 0;
-    virtual sd::Tensor<float> diffusion_to_vae_latents(const sd::Tensor<float>& latents)                           = 0;
-    virtual sd::Tensor<float> vae_to_diffusion_latents(const sd::Tensor<float>& latents)                           = 0;
-    virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors)                                   = 0;
+    virtual sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output,
+                                                    std::shared_ptr<RNG> rng,
+                                                    VAEPosterior posterior = VAEPosterior::ModelDefault,
+                                                    bool use_supplied_rng  = false)      = 0;
+    virtual sd::Tensor<float> diffusion_to_vae_latents(const sd::Tensor<float>& latents) = 0;
+    virtual sd::Tensor<float> vae_to_diffusion_latents(const sd::Tensor<float>& latents) = 0;
+    virtual void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors)         = 0;
     virtual void set_conv2d_scale(float scale) { SD_UNUSED(scale); };
 };
 
@@ -377,7 +401,7 @@ struct FakeVAE : public VAE {
         return z;
     }
 
-    sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng) override {
+    sd::Tensor<float> vae_output_to_latents(const sd::Tensor<float>& vae_output, std::shared_ptr<RNG> rng, VAEPosterior, bool) override {
         SD_UNUSED(rng);
         return vae_output;
     }

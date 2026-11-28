@@ -1,0 +1,2 @@
+/start-server.sh text eol=lf
+/start-server.bat text eol=crlf

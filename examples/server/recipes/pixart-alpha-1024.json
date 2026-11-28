@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "id": "pixart-alpha-1024",
+  "name": "PixArt Alpha XL 1024",
+  "size_multiple": 16,
+  "description": "Use the matching PixArt Alpha transformer and SD 1.x-style VAE. Resolution/aspect-ratio micro-conditioning is not currently applied by the runtime.",
+  "model_url": "https://huggingface.co/PixArt-alpha/PixArt-XL-2-1024-MS",
+  "slots": [
+    {
+      "id": "diffusion_model",
+      "required": true
+    },
+    {
+      "id": "t5xxl",
+      "required": true
+    },
+    {
+      "id": "vae",
+      "required": false
+    },
+    {
+      "id": "tae",
+      "required": false
+    }
+  ],
+  "required_any": [
+    [
+      "vae",
+      "tae"
+    ]
+  ],
+  "context": {
+    "model_args": "pixart_vae_scale_factor=0.18215"
+  },
+  "defaults": {
+    "scheduler": "discrete",
+    "sampling_method": "euler",
+    "cfg_scale": 4.5,
+    "steps": 20,
+    "width": 1024,
+    "height": 1024
+  }
+}

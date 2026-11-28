@@ -1,0 +1,43 @@
+# version: 0.0.0
+# docs/models/anima.md — CLI
+
+var {
+    model_path = "../models/diffusion_models/anima-preview.safetensors"
+    text_path = "../models/text_encoders/qwen_3_06b_base.safetensors"
+    vae_path = "../models/vae/qwen_image_vae.safetensors"
+
+    output_path = "output.png"
+
+    prompt = "a lovely cat holding a sign says 'anima.cpp'"
+    negative_prompt = ""
+
+    seed = 42
+    rng_type = "cuda"
+    width = 512
+    height = 512
+
+    steps = 20
+    cfg_scale = 6.0
+    method = "euler"
+    scheduler = "discrete"
+}
+
+fn main() {
+    model = load_dit(model_path, family = "anima", params_backend = "cpu")
+    text = load_text_encoder(text_path, family = "anima", params_backend = "cpu")
+    vae = load_vae(vae_path, family = "anima", params_backend = "cpu")
+
+    base = tensor::zeros(latent_shape(vae, width = width, height = height))
+    positive = encode_prompt(text, prompt, width = width, height = height)
+    negative = encode_prompt(text, negative_prompt, width = width, height = height)
+    pos = predictor(model, positive)
+    neg = predictor(model, negative)
+    guided = cfg(pos, neg, scale = cfg_scale)
+    sigmas = make_sigmas(guided, latent = base, steps = steps, scheduler = scheduler)
+    rng = make_rng(rng_type, seed = seed)
+    start = add_noise(guided, base, tensor::randn_like(base, rng = rng), sigma = sigmas[0])
+    latent = sample(start, sigmas, predict = guided, method = method, rng = rng)
+    image = vae_decode(vae, dit_to_vae_latents(vae, latent))
+    image::save(output_path, image)
+    return {image = image, latent = latent}
+}

@@ -1,0 +1,66 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(binding = 0) readonly buffer X {
+    float data_x[];
+};
+layout(binding = 1) readonly buffer PE {
+    float data_pe[];
+};
+layout(binding = 2) writeonly buffer D {
+    float data_d[];
+};
+
+layout(push_constant) uniform parameter {
+    uint half_dim;
+    uint rot_half;
+    uint heads;
+    uint tokens;
+    uint pairs;
+    uint x_stride[4];
+    uint pe_stride[4];
+    uint x_offset;
+    uint pe_offset;
+    uint dst_offset;
+    uint interleaved;
+}
+pc;
+
+void main() {
+    const uint index = gl_GlobalInvocationID.x + gl_NumWorkGroups.x * gl_WorkGroupSize.x * gl_GlobalInvocationID.y;
+    if (index >= pc.pairs) {
+        return;
+    }
+    const uint j       = index % pc.half_dim;
+    const uint row     = index / pc.half_dim;
+    const uint token   = row % pc.tokens;
+    const uint head    = (row / pc.tokens) % pc.heads;
+    const uint batch   = row / (pc.tokens * pc.heads);
+    const uint i0      = pc.interleaved != 0 || j >= pc.rot_half ? 2 * j : j;
+    const uint i1      = pc.interleaved != 0 || j >= pc.rot_half ? 2 * j + 1 : j + pc.rot_half;
+    const uint x_row   = pc.x_offset + head * pc.x_stride[1] + token * pc.x_stride[2] + batch * pc.x_stride[3];
+    const uint out_row = pc.dst_offset + row * pc.half_dim * 2;
+    const float a      = data_x[x_row + i0 * pc.x_stride[0]];
+    const float b      = data_x[x_row + i1 * pc.x_stride[0]];
+    if (j >= pc.rot_half) {
+        data_d[out_row + i0] = a;
+        data_d[out_row + i1] = b;
+        return;
+    }
+    const uint matrix = pc.pe_offset + j * pc.pe_stride[2] + token * pc.pe_stride[3];
+    const float c     = data_pe[matrix];
+    const float s     = data_pe[matrix + pc.pe_stride[1]];
+    // Preserve the separate multiply/add rounding of the unfused graph.
+    precise float y0;
+    precise float y1;
+    if (pc.interleaved != 0) {
+        y0 = a * c + b * data_pe[matrix + pc.pe_stride[0]];
+        y1 = a * s + b * data_pe[matrix + pc.pe_stride[0] + pc.pe_stride[1]];
+    } else {
+        y0 = a * c - b * s;
+        y1 = a * s + b * c;
+    }
+    data_d[out_row + i0] = y0;
+    data_d[out_row + i1] = y1;
+}
