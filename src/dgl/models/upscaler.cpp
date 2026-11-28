@@ -95,6 +95,10 @@ namespace sd::dgl::models {
         sd::ParallelScope tensor_scope(tensor_executor.get());
         sd::Image upscaled_image = {0, 0, 0, nullptr};
         const int scale          = get_scale(factor);
+        if (scale <= 0) {
+            LOG_ERROR("unsupported upscale factor: %d", factor);
+            return upscaled_image;
+        }
         int output_width         = (int)input_image.width * scale;
         int output_height        = (int)input_image.height * scale;
         LOG_INFO("upscaling from (%i x %i) to (%i x %i)",

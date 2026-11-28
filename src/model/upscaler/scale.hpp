@@ -3,8 +3,6 @@
 
 #include <string>
 
-#include "model.h"
-
 class ModelLoader;
 
 namespace sd::upscaling {
@@ -16,7 +14,7 @@ namespace sd::upscaling {
         Architecture architecture = Architecture::Unknown;
         int scale                 = 0;
     };
-    Description describe(const String2TensorStorage& tensors);
+    Description describe(const ModelLoader& loader);
     bool load_weights(ModelLoader& loader, const std::string& path);
     int probe_scale(const std::string& path);
 }

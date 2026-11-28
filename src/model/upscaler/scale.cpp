@@ -1,14 +1,15 @@
 #include "model/upscaler/scale.hpp"
 
 #include "model/upscaler/esrgan.hpp"
+#include "model/upscaler/kandinsky_imagesr.hpp"
 #include "model/upscaler/mosr.hpp"
 #include "model_loader.h"
 
 namespace sd::upscaling {
-    Description describe(const String2TensorStorage& tensors) {
-        if (tensors.count("time_embed_table") && tensors.count("visual_transformer_blocks.0.xattn_bias_table") &&
-            tensors.count("first_stage_model.encoder.conv_in.weight"))
+    Description describe(const ModelLoader& loader) {
+        if (loader.get_metadata().count("kandinsky_imagesr_config"))
             return {Architecture::KandinskyImageSR, 4};
+        const auto& tensors = loader.get_tensor_storage_map();
         if (tensors.count("gblocks.0.weight")) {
             const auto config = MoSRConfig::detect_from_weights(tensors);
             return config.is_valid() ? Description{Architecture::MoSR, config.scale} : Description{};
@@ -32,6 +33,9 @@ namespace sd::upscaling {
         ModelLoader loader;
         if (path.empty() || !load_weights(loader, path))
             return 0;
-        return describe(loader.get_tensor_storage_map()).scale;
+        const auto description = describe(loader);
+        if (description.architecture == Architecture::KandinskyImageSR && !KandinskyImageSR::probe_bundle(loader))
+            return 0;
+        return description.scale;
     }
 }

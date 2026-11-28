@@ -64,8 +64,9 @@ namespace sd::dgl::models {
         if (model->source_file_ == 0) {
             return nullptr;
         }
-        const auto& tensors    = manager->model_source(model->source_file_).get_tensor_storage_map();
-        const auto description = sd::upscaling::describe(tensors);
+        const auto& source     = manager->model_source(model->source_file_);
+        const auto& tensors    = source.get_tensor_storage_map();
+        const auto description = sd::upscaling::describe(source);
         if (description.architecture == sd::upscaling::Architecture::Unknown) {
             LOG_ERROR("unsupported image upscaler weights: '%s'", path.c_str());
             return nullptr;
@@ -73,7 +74,7 @@ namespace sd::dgl::models {
         std::map<std::string, ggml_tensor*> weights;
         const bool kandinsky = description.architecture == sd::upscaling::Architecture::KandinskyImageSR;
         if (kandinsky) {
-            model->kandinsky_ = KandinskyImageSR::Upscaler::create(manager->model_source(model->source_file_), backend, manager, conv_direct);
+            model->kandinsky_ = KandinskyImageSR::Upscaler::create(source, backend, manager, conv_direct);
             if (!model->kandinsky_)
                 return nullptr;
             model->kandinsky_->get_param_tensors(weights);

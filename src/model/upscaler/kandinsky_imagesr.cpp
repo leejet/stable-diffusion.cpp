@@ -1,5 +1,8 @@
 #include "model/upscaler/kandinsky_imagesr.hpp"
 
+#include <algorithm>
+#include <iterator>
+
 #include "json.hpp"
 #include "model/vae/auto_encoder_kl.hpp"
 #include "model_loader.h"
@@ -19,27 +22,63 @@ namespace KandinskyImageSR {
         throw std::runtime_error("missing baked timestep " + std::to_string(t));
     }
 
+    struct BundleConfig {
+        KandinskyImageSRConfig transformer;
+        int row_x2, row_x4;
+    };
+
+    static BundleConfig read_bundle_config(const ModelLoader& loader) {
+        const auto json  = nlohmann::json::parse(loader.get_metadata().at("kandinsky_imagesr_config"));
+        const auto steps = json.at("baked_timesteps").get<std::vector<float>>();
+        const auto axes  = json.at("axes_dims").get<std::vector<int>>();
+        if (json.at("_class_name") != "KandinskyImageSRBakedTransformer3DModel" ||
+            json.at("attention_type") != "regular" || json.at("visual_cond") != false ||
+            json.at("patch_size") != nlohmann::json::array({1, 2, 2}) || json.at("baked_latent_size") != tile_side / 8 ||
+            json.at("in_visual_dim") != 16 || json.at("out_visual_dim") != 16 ||
+            axes != std::vector<int>{32, 48, 48} || json.at("num_visual_blocks") != 50) {
+            throw std::runtime_error("unsupported ImageSR transformer configuration");
+        }
+        const auto& tensors = loader.get_tensor_storage_map();
+        const auto config   = KandinskyImageSRConfig::detect_from_weights(tensors, json.at("num_visual_blocks").get<int>(), axes);
+        if (config.dim != 2560 || config.ff_dim != 10240 || config.time_dim != 512 || config.rows != static_cast<int64_t>(steps.size())) {
+            throw std::runtime_error("incompatible transformer weight dimensions");
+        }
+        return {config, timestep_row(steps, timestep_x2), timestep_row(steps, timestep_x4)};
+    }
+
+    bool probe_bundle(const ModelLoader& loader) {
+        try {
+            const auto config = read_bundle_config(loader);
+            // Build only tensor descriptors so discovery checks the same transformer layout as inference.
+            std::unique_ptr<ggml_context, decltype(&ggml_free)> ctx(
+                ggml_init({MAX_PARAMS_TENSOR_NUM * ggml_tensor_overhead(), nullptr, true}), ggml_free);
+            if (!ctx)
+                return false;
+            Transformer model(config.transformer);
+            model.init(ctx.get());
+            std::map<std::string, ggml_tensor*> expected;
+            model.get_param_tensors(expected);
+            const auto& tensors = loader.get_tensor_storage_map();
+            for (const auto& [name, tensor] : expected) {
+                const auto it = tensors.find(name);
+                if (it == tensors.end() || !std::equal(std::begin(tensor->ne), std::end(tensor->ne), it->second.ne))
+                    return false;
+            }
+            return tensors.count("first_stage_model.encoder.conv_in.weight") != 0;
+        } catch (const std::exception& e) {
+            LOG_DEBUG("invalid Kandinsky ImageSR bundle: %s", e.what());
+            return false;
+        }
+    }
+
     std::unique_ptr<Upscaler> Upscaler::create(const ModelLoader& loader, ggml_backend_t backend, std::shared_ptr<RunnerWeightManager> manager, bool direct) {
         try {
-            const auto json  = nlohmann::json::parse(loader.get_metadata().at("kandinsky_imagesr_config"));
-            const auto steps = json.at("baked_timesteps").get<std::vector<float>>();
-            const auto axes  = json.at("axes_dims").get<std::vector<int>>();
-            if (json.at("_class_name") != "KandinskyImageSRBakedTransformer3DModel" ||
-                json.at("attention_type") != "regular" || json.at("visual_cond") != false ||
-                json.at("patch_size") != nlohmann::json::array({1, 2, 2}) || json.at("baked_latent_size") != tile_side / 8 ||
-                json.at("in_visual_dim") != 16 || json.at("out_visual_dim") != 16 ||
-                axes != std::vector<int>{32, 48, 48} || json.at("num_visual_blocks") != 50) {
-                throw std::runtime_error("unsupported ImageSR transformer configuration");
-            }
-            const auto& tensors = loader.get_tensor_storage_map();
-            const auto config   = KandinskyImageSRConfig::detect_from_weights(tensors, json.at("num_visual_blocks").get<int>(), axes);
-            if (config.dim != 2560 || config.ff_dim != 10240 || config.time_dim != 512 || config.rows != static_cast<int64_t>(steps.size())) {
-                throw std::runtime_error("incompatible transformer weight dimensions");
-            }
+            const auto config     = read_bundle_config(loader);
+            const auto& tensors   = loader.get_tensor_storage_map();
             auto upscaler         = std::make_unique<Upscaler>();
-            upscaler->row_x2      = timestep_row(steps, timestep_x2);
-            upscaler->row_x4      = timestep_row(steps, timestep_x4);
-            upscaler->transformer = std::make_unique<Runner>(backend, tensors, config, tile_side / 8, manager);
+            upscaler->row_x2      = config.row_x2;
+            upscaler->row_x4      = config.row_x4;
+            upscaler->transformer = std::make_unique<Runner>(backend, tensors, config.transformer, tile_side / 8, manager);
             upscaler->vae         = std::make_shared<AutoEncoderKL>(backend, tensors, "first_stage_model", false, false, VERSION_FLUX, manager);
             upscaler->vae->set_conv2d_direct_enabled(direct);
             upscaler->vae->set_flash_attention_enabled(true);

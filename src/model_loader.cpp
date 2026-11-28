@@ -207,9 +207,10 @@ bool ModelLoader::parse_file(const std::string& file_path, const std::string& pr
     }
     parsed_dependencies_.push_back(stamp);
     if (is_directory(file_path)) {
-        const std::string diffusers_index_path   = path_join(file_path, "model_index.json");
-        const std::string diffusers_unet_path    = path_join(file_path, "unet/diffusion_pytorch_model.safetensors");
-        const std::string safetensors_index_path = path_join(file_path, "model.safetensors.index.json");
+        const auto root                          = std::filesystem::u8path(file_path);
+        const std::string diffusers_index_path   = (root / "model_index.json").u8string();
+        const std::string diffusers_unet_path    = (root / "unet/diffusion_pytorch_model.safetensors").u8string();
+        const std::string safetensors_index_path = (root / "model.safetensors.index.json").u8string();
         bool has_index, has_unet, has_shard_index;
         if (!inspect_optional_file(diffusers_index_path, has_index) ||
             !inspect_optional_file(diffusers_unet_path, has_unet) ||
@@ -220,7 +221,7 @@ bool ModelLoader::parse_file(const std::string& file_path, const std::string& pr
             return parse_file(safetensors_index_path, prefix);
         }
         if (!has_unet) {
-            const auto config_path = path_join(file_path, "transformer/config.json");
+            const auto config_path = (root / "transformer/config.json").u8string();
             bool has_config;
             if (!inspect_optional_file(config_path, has_config))
                 return false;
@@ -228,11 +229,11 @@ bool ModelLoader::parse_file(const std::string& file_path, const std::string& pr
                 std::ifstream input(std::filesystem::u8path(config_path));
                 auto config = nlohmann::json::parse(input, nullptr, false);
                 if (config.is_object() && config.value("_class_name", "") == "KandinskyImageSRBakedTransformer3DModel") {
-                    auto transformer = path_join(file_path, "transformer/diffusion_pytorch_model.safetensors");
+                    auto transformer = (root / "transformer/diffusion_pytorch_model.safetensors").u8string();
                     bool sharded;
                     if (!inspect_optional_file(transformer + ".index.json", sharded) ||
                         !parse_file(sharded ? transformer + ".index.json" : transformer, prefix) ||
-                        !parse_file(path_join(file_path, "vae/diffusion_pytorch_model.safetensors"), prefix + "vae."))
+                        !parse_file((root / "vae/diffusion_pytorch_model.safetensors").u8string(), prefix + "vae."))
                         return false;
                     metadata_["kandinsky_imagesr_config"] = config.dump();
                     return true;

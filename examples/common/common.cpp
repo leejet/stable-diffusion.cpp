@@ -1930,18 +1930,16 @@ static bool resolve_model_file_from_dir(const std::string& model_name,
         return false;
     };
 
-    if (model_name.empty() ||
-        model_name.find('/') != std::string::npos ||
-        model_name.find('\\') != std::string::npos ||
-        fs::u8path(model_name).has_root_path() ||
+    const auto name = fs::u8path(model_name);
+    if (name.empty() || name == "." || name == ".." || name.has_parent_path() || name.has_root_path() ||
         ends_with_valid_ext()) {
         LOG_ERROR("%s must be a model name without path or extension: %s", label, model_name.c_str());
         return false;
     }
 
     fs::path model_dir_path = fs::u8path(model_dir);
-    const auto bundle       = model_dir_path / fs::u8path(model_name);
-    if (model_name != "." && model_name != ".." && fs::is_regular_file(bundle / "transformer" / "config.json")) {
+    const auto bundle       = model_dir_path / name;
+    if (fs::is_regular_file(bundle / "transformer" / "config.json")) {
         resolved_path = bundle.lexically_normal().u8string();
         return true;
     }

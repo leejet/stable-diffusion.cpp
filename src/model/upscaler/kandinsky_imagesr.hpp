@@ -143,9 +143,11 @@ namespace KandinskyImageSR {
                 ggml_build_forward_expand(gf, out);
                 return gf;
             };
-            return restore_trailing_singleton_dims(GGMLRunner::compute(graph, threads), latent.dim());
+            return restore_trailing_singleton_dims(GGMLRunner::compute(graph, threads, false), latent.dim());
         }
     };
+
+    bool probe_bundle(const ModelLoader& loader);
 
     struct Upscaler {
         std::unique_ptr<Runner> transformer;
