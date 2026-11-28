@@ -119,7 +119,7 @@ namespace Flux3 {
             q                = norm->query_norm(ctx, q);
             k                = norm->key_norm(ctx, k);
             auto attn        = Rope::attention(ctx, q, k, v, pe, nullptr);
-            auto mlp         = ggml_ext_silu_act(ctx, linear(ctx, "mlp_in", x_mod));
+            auto mlp         = std::dynamic_pointer_cast<Linear>(blocks["mlp_in"])->forward_swiglu(ctx, x_mod);
             auto update      = ggml_add(gc, linear(ctx, "attn_out", attn), linear(ctx, "mlp_out", mlp));
             ggml_tensor* out = nullptr;
             offset           = 0;
@@ -240,7 +240,7 @@ namespace Flux3 {
             GGML_ASSERT(!config.flow_map || extra->target_timestep);
             auto get_graph = [&]() {
                 auto gf         = new_graph_custom(FLUX_GRAPH_SIZE);
-                auto runner_ctx = get_context();
+                auto runner_ctx = get_context(gf);
                 auto x          = make_input(*params.x);
                 auto text       = make_input(*params.context);
                 GGML_ASSERT(x->ne[3] == 1 && text->ne[2] == 1);

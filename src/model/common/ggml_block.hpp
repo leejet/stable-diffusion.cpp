@@ -240,6 +240,28 @@ public:
         return it != params.end() && it->second != nullptr && ggml_is_quantized(it->second->type);
     }
 
+    ggml_tensor* forward_swiglu(GGMLRunnerContext* ctx, ggml_tensor* x, bool gate_first = true) {
+#ifndef SD_USE_UPSTREAM_GGML
+        auto* w                   = params["weight"];
+        const float linear_scale  = ctx->linear_scale > 0.f ? ctx->linear_scale : scale;
+        const int64_t hidden_size = out_features / 2;
+        if (ctx->graph && sd_backend_is(ctx->backend, "CUDA") && w->type == GGML_TYPE_Q8_0 && !bias && !has_weight_scale &&
+            !ctx->weight_adapter && linear_scale == 1.f && out_features % 256 == 0 &&
+            x->type == GGML_TYPE_F32 && ggml_is_contiguous(x) && x->ne[1] >= 1024 && x->ne[2] == 1 && x->ne[3] == 1) {
+            auto* gate_weight = ggml_view_2d(ctx->ggml_ctx, w, w->ne[0], hidden_size, w->nb[1], 0);
+            auto* up_weight   = ggml_view_2d(ctx->ggml_ctx, w, w->ne[0], hidden_size, w->nb[1], hidden_size * w->nb[1]);
+            // Expand both views first so the projections stay adjacent for fusion.
+            ctx->expand_graph(gate_weight);
+            ctx->expand_graph(up_weight);
+            const bool precision = ggml_ext_force_prec_f32(ctx, force_prec_f32, precision_flags);
+            auto* gate           = ggml_ext_linear(ctx, x, gate_weight, nullptr, precision);
+            auto* up             = ggml_ext_linear(ctx, x, up_weight, nullptr, precision);
+            return ggml_swiglu_split(ctx->ggml_ctx, gate_first ? gate : up, gate_first ? up : gate);
+        }
+#endif
+        return ggml_ext_silu_act(ctx, forward(ctx, x), gate_first);
+    }
+
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         const bool force_prec_f32 = ggml_ext_force_prec_f32(ctx, this->force_prec_f32, precision_flags);
         ggml_tensor* w            = params["weight"];
