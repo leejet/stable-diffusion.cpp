@@ -210,6 +210,7 @@ namespace sd {
         bool conv_direct = false;
         int tile_size    = 128;
         int repeats      = 1;
+        int factor       = 0;
     };
 
     struct OptConfig {

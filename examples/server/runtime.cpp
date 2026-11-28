@@ -504,6 +504,21 @@ void refresh_upscaler_cache(ServerRuntime& rt) {
             auto end = fs::directory_iterator();
             while (!ec && it != end) {
                 std::error_code entry_ec;
+                const auto& path = it->path();
+                if (it->is_directory(entry_ec)) {
+                    if (fs::is_regular_file(path / "transformer" / "config.json", entry_ec)) {
+                        UpscalerEntry entry{};
+                        entry.path = entry.name = path.filename().u8string();
+                        entry.fullpath          = fs::absolute(path).lexically_normal().u8string();
+                        entry.scale             = sd_upscaler_probe_scale(entry.fullpath.c_str());
+                        if (entry.scale > 0) {
+                            entry.model_name = "Kandinsky ImageSR 2.0";
+                            new_cache.push_back(std::move(entry));
+                        }
+                    }
+                    it.increment(ec);
+                    continue;
+                }
                 bool is_reg = it->is_regular_file(entry_ec);
                 if (entry_ec || !is_reg) {
                     it.increment(ec);

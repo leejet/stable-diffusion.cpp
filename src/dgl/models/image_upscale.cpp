@@ -3,6 +3,7 @@
 #include "core/ggml_extend_backend.h"
 #include "core/util.h"
 #include "model/upscaler/esrgan.hpp"
+#include "model/upscaler/kandinsky_imagesr.hpp"
 #include "model/upscaler/mosr.hpp"
 #include "model/upscaler/scale.hpp"
 #include "model_manager.h"
@@ -25,10 +26,17 @@ namespace sd::dgl::models {
     }
 
     GGMLRunner* ImageUpscaleModel::runner() const {
+        if (kandinsky_)
+            return kandinsky_->transformer.get();
         return mosr_ != nullptr ? static_cast<GGMLRunner*>(mosr_.get()) : esrgan_.get();
     }
 
-    int ImageUpscaleModel::scale() const {
+    int ImageUpscaleModel::scale(int requested) const {
+        if (kandinsky_) {
+            if (requested == 0)
+                return 4;
+            return requested == 2 || requested == 4 ? requested : 0;
+        }
         if (mosr_ != nullptr) {
             return mosr_->config.scale;
         }
@@ -56,14 +64,21 @@ namespace sd::dgl::models {
         if (model->source_file_ == 0) {
             return nullptr;
         }
-        const auto& tensors    = manager->model_source(model->source_file_).get_tensor_storage_map();
-        const auto description = sd::upscaling::describe(tensors);
+        const auto& source     = manager->model_source(model->source_file_);
+        const auto& tensors    = source.get_tensor_storage_map();
+        const auto description = sd::upscaling::describe(source);
         if (description.architecture == sd::upscaling::Architecture::Unknown) {
             LOG_ERROR("unsupported image upscaler weights: '%s'", path.c_str());
             return nullptr;
         }
         std::map<std::string, ggml_tensor*> weights;
-        if (description.architecture == sd::upscaling::Architecture::MoSR) {
+        const bool kandinsky = description.architecture == sd::upscaling::Architecture::KandinskyImageSR;
+        if (kandinsky) {
+            model->kandinsky_ = KandinskyImageSR::Upscaler::create(source, backend, manager, conv_direct);
+            if (!model->kandinsky_)
+                return nullptr;
+            model->kandinsky_->get_param_tensors(weights);
+        } else if (description.architecture == sd::upscaling::Architecture::MoSR) {
             model->mosr_ = std::make_unique<MoSR>(backend, tensors, manager);
             if (model->mosr_->mosr_net == nullptr) {
                 LOG_ERROR("unsupported MoSR weights: '%s'", path.c_str());
@@ -86,17 +101,17 @@ namespace sd::dgl::models {
                               : ModelManager::ResidencyMode::ParamBackend;
         if (!manager->register_param_tensors(ModelComponent::Upscaler, std::move(weights), mode,
                                              backend, params_backend, nullptr, false, false, nullptr,
-                                             model->source_file_, VERSION_ESRGAN) ||
+                                             model->source_file_, kandinsky ? VERSION_FLUX : VERSION_ESRGAN) ||
             !manager->validate_param_tensors(model->weights_)) {
             LOG_ERROR("register upscaler weights failed: '%s'", path.c_str());
             return nullptr;
         }
         model->runner()->set_conv2d_direct_enabled(conv_direct);
-        LOG_INFO("Upscaler architecture: %s, weight type: %s", model->runner()->get_desc().c_str(), ggml_type_name(weight_type));
+        LOG_INFO("Upscaler architecture: %s, weight type: %s", model->runner()->get_desc().c_str(), kandinsky ? "checkpoint" : ggml_type_name(weight_type));
         return model;
     }
 
-    Tensor<float> upscale_image_tensor(ImageUpscaleModel& model, const Tensor<float>& input, int n_threads, int tile_size) {
+    Tensor<float> upscale_image_tensor(ImageUpscaleModel& model, const Tensor<float>& input, int n_threads, int tile_size, int factor) {
         if (input.empty() || input.dim() != 4 || (input.shape()[2] != 3 && input.shape()[2] != 4)) {
             LOG_ERROR("upscaler expects a 4D RGB or RGBA image tensor");
             return {};
@@ -110,9 +125,11 @@ namespace sd::dgl::models {
         const auto compute   = [&](const Tensor<float>& tensor) {
             return model.mosr_ != nullptr ? model.mosr_->compute(n_threads, tensor) : model.esrgan_->compute(n_threads, tensor);
         };
-        const int scale = model.scale();
+        const int scale = model.scale(factor);
         Tensor<float> output;
-        if (tile_size <= 0 || (input.shape()[0] <= tile_size && input.shape()[1] <= tile_size)) {
+        if (model.kandinsky_) {
+            output = model.kandinsky_->upscale(n_threads, rgb, scale);
+        } else if (tile_size <= 0 || (input.shape()[0] <= tile_size && input.shape()[1] <= tile_size)) {
             output = compute(rgb);
         } else {
             output = process_tiles_2d(rgb,

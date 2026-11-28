@@ -33,7 +33,7 @@ fn upscale_layer(index, args) {
     latent = args.latent[:, :, index]
     image = vae_decode(args.vae, dit_to_vae_latents(args.vae, latent), dtype = "f32"{{vae_run_options}})
 {% if flags.hires_model %}
-    upscaled = upscale(args.upscaler, image::to_u8(image))
+    upscaled = upscale(args.upscaler, image::to_u8(image), factor = {{hires_upscale_factor}})
     pixels = image::to_f32(tensor::interpolate(upscaled, size = args.size, axes = [1, 2], mode = args.mode))
 {% else %}
     pixels = tensor::interpolate(image, size = args.size, mode = args.mode)

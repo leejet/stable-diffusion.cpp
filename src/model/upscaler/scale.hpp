@@ -3,17 +3,19 @@
 
 #include <string>
 
-#include "model.h"
+class ModelLoader;
 
 namespace sd::upscaling {
     enum class Architecture { Unknown,
                               ESRGAN,
-                              MoSR };
+                              MoSR,
+                              KandinskyImageSR };
     struct Description {
         Architecture architecture = Architecture::Unknown;
         int scale                 = 0;
     };
-    Description describe(const String2TensorStorage& tensors);
+    Description describe(const ModelLoader& loader);
+    bool load_weights(ModelLoader& loader, const std::string& path);
     int probe_scale(const std::string& path);
 }
 

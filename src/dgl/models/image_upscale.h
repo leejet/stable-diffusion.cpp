@@ -14,6 +14,9 @@ class SDBackendManager;
 struct GGMLRunner;
 struct ESRGAN;
 struct MoSR;
+namespace KandinskyImageSR {
+    struct Upscaler;
+}
 
 namespace sd::dgl::models {
     class ImageUpscaleModel {
@@ -24,10 +27,11 @@ namespace sd::dgl::models {
             const std::string&,
             bool,
             ggml_type);
-        friend Tensor<float> upscale_image_tensor(ImageUpscaleModel&, const Tensor<float>&, int, int);
+        friend Tensor<float> upscale_image_tensor(ImageUpscaleModel&, const Tensor<float>&, int, int, int);
 
         std::weak_ptr<ModelManager::ResourceHandle> manager_;
         std::unique_ptr<ESRGAN> esrgan_;
+        std::unique_ptr<KandinskyImageSR::Upscaler> kandinsky_;
         std::unique_ptr<MoSR> mosr_;
         std::vector<ggml_tensor*> weights_;
         uint64_t source_file_ = 0;
@@ -37,7 +41,7 @@ namespace sd::dgl::models {
     public:
         ~ImageUpscaleModel();
         GGMLRunner* runner() const;
-        int scale() const;
+        int scale(int requested = 0) const;
         ModelLoader::FileId source_file() const { return source_file_; }
     };
 
@@ -52,7 +56,8 @@ namespace sd::dgl::models {
     Tensor<float> upscale_image_tensor(ImageUpscaleModel& model,
                                        const Tensor<float>& input,
                                        int n_threads,
-                                       int tile_size);
+                                       int tile_size,
+                                       int factor = 0);
 }
 
 #endif  // __SD_DGL_MODELS_IMAGE_UPSCALE_H__

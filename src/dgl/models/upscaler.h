@@ -31,9 +31,9 @@ namespace sd::dgl::models {
         ~ImageUpscaler() override;
 
         bool init(ImageUpscalerParams params);
-        int get_scale();
-        sd::Tensor<float> upscale_tensor(const sd::Tensor<float>& input_tensor);
-        sd::Image upscale(sd::Image input_image);
+        int get_scale(int factor = 0);
+        sd::Tensor<float> upscale_tensor(const sd::Tensor<float>& input_tensor, int factor = 0);
+        sd::Image upscale(sd::Image input_image, int factor = 0);
 
     private:
         ImageUpscalerParams params_;

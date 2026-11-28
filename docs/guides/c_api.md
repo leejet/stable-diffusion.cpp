@@ -117,9 +117,9 @@ are required and set to `NULL` on failure. All outputs use `sd_result_t`.
 
 Image upscaling loads `model_path` with optional `n_threads`, `backend`,
 `params_backend`, `conv_direct` and `tile_size` (default 128). Execution takes
-an RGB `image`. Its scale is fixed by the loaded model and can be queried with
-`sd_upscaler_get_scale()`; metadata records that actual scale. The former
-image-upscale factor argument was unused and has been removed.
+an RGB `image`. Query the model's default scale with `sd_upscaler_get_scale()`.
+Kandinsky ImageSR supports a per-run integer `factor` of 2 or 4 (default 4).
+ESRGAN and MoSR use the scale encoded in their weights.
 
 ```c
 sd_upscaler_opt_t* load = sd_upscaler_opt_create();
@@ -424,6 +424,7 @@ For SDXL's bundled VAE (no `vae_path`), generation emits
 | `fps` | `int` | video |
 | `height` | `int` | image, video |
 | `high_noise_diffusion_model_path` | `string` | context |
+| `factor` | `int` | upscale. Selects 2× or 4× for Kandinsky ImageSR |
 | `image` | `tensor` | upscale |
 | `init_image` | `tensor` | image, video |
 | `linear_scale` | `float` | context |

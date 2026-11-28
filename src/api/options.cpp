@@ -475,6 +475,7 @@ static void add_postprocess_specs(std::vector<ParamSpec>& specs) {
     ParamGroup input(specs, Upscale, [](sd::OptConfig& config) { return std::tie(config.post); });
     ParamGroup upscaler(specs, Upscaler, [](sd::OptConfig& config) { return std::tie(config.post); });
     input.image("image", &sd::PostprocessConfig::image);
+    input.integer("factor", &sd::PostprocessConfig::factor, 1, 16);
     input.integer("repeats", &sd::PostprocessConfig::repeats, 1, 16);
     upscaler.boolean("conv_direct", &sd::PostprocessConfig::conv_direct);
     upscaler.integer("tile_size", &sd::PostprocessConfig::tile_size, 1, INT32_MAX);

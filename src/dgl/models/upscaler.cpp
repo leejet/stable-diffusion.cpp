@@ -4,9 +4,9 @@
 #include <utility>
 
 #include "core/ggml_extend_backend.h"
+#include "core/ggml_runner.h"
 #include "core/util.h"
-#include "model/upscaler/esrgan.hpp"
-#include "model/upscaler/mosr.hpp"
+#include "model/upscaler/scale.hpp"
 #include "model_loader.h"
 #include "stable-diffusion.h"
 
@@ -28,19 +28,20 @@ namespace sd::dgl::models {
         release_weights();
     }
 
-    int ImageUpscaler::get_scale() {
-        return model != nullptr ? model->scale() : 1;
+    int ImageUpscaler::get_scale(int factor) {
+        return model != nullptr ? model->scale(factor) : 1;
     }
 
     bool ImageUpscaler::init(ImageUpscalerParams params) {
         params_ = std::move(params);
         ggml_log_set(sd_ggml_log_callback, nullptr);
         ModelLoader loader;
-        if (!loader.init_from_file_and_convert_name(params_.path, "", VERSION_ESRGAN)) {
+        if (!sd::upscaling::load_weights(loader, params_.path)) {
             LOG_ERROR("init upscaler model loader failed: '%s'", params_.path.c_str());
             return false;
         }
-        loader.set_wtype_override(model_data_type);
+        if (!loader.get_metadata().count("kandinsky_imagesr_config"))
+            loader.set_wtype_override(model_data_type);
         return build(std::move(loader));
     }
 
@@ -70,13 +71,13 @@ namespace sd::dgl::models {
         return load_weights_eagerly();
     }
 
-    sd::Tensor<float> ImageUpscaler::upscale_tensor(const sd::Tensor<float>& input_tensor) {
+    sd::Tensor<float> ImageUpscaler::upscale_tensor(const sd::Tensor<float>& input_tensor, int factor) {
         Model::ExecutionScope scope(*this);
         scope.require_ready();
         if (model == nullptr) {
             return {};
         }
-        return upscale_image_tensor(*model, input_tensor, n_threads, params_.tile_size);
+        return upscale_image_tensor(*model, input_tensor, n_threads, params_.tile_size, factor);
     }
 
     bool ImageUpscaler::attach_loras() {
@@ -90,10 +91,14 @@ namespace sd::dgl::models {
         model->runner()->set_weight_adapter(adapter);
     }
 
-    sd::Image ImageUpscaler::upscale(sd::Image input_image) {
+    sd::Image ImageUpscaler::upscale(sd::Image input_image, int factor) {
         sd::ParallelScope tensor_scope(tensor_executor.get());
         sd::Image upscaled_image = {0, 0, 0, nullptr};
-        const int scale          = get_scale();
+        const int scale          = get_scale(factor);
+        if (scale <= 0) {
+            LOG_ERROR("unsupported upscale factor: %d", factor);
+            return upscaled_image;
+        }
         int output_width         = (int)input_image.width * scale;
         int output_height        = (int)input_image.height * scale;
         LOG_INFO("upscaling from (%i x %i) to (%i x %i)",
@@ -102,7 +107,7 @@ namespace sd::dgl::models {
         sd::Tensor<float> input_tensor = sd_image_to_tensor(input_image);
         sd::Tensor<float> upscaled;
         int64_t t0 = ggml_time_ms();
-        upscaled   = upscale_tensor(input_tensor);
+        upscaled   = upscale_tensor(input_tensor, scale);
         if (upscaled.empty()) {
             return upscaled_image;
         }

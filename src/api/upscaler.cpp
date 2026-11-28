@@ -17,7 +17,7 @@ struct sd_upscaler {
 };
 
 namespace sd::api {
-    static std::string upscale_source(const OptConfig& config, int repeats) {
+    static std::string upscale_source(const OptConfig& config, int repeats, int factor = 0) {
         const auto& settings = config.context;
         std::string options;
         for (const auto& [name, spec] : std::map<std::string, const char*>{{"backend", settings.backend}, {"params_backend", settings.params_backend}}) {
@@ -34,6 +34,7 @@ namespace sd::api {
         return render_template("upscale", {{"model_path", nlohmann::json(settings.model_path).dump()},
                                            {"tile_size", std::to_string(config.post.tile_size)},
                                            {"repeats", std::to_string(repeats)},
+                                           {"factor_option", factor ? ", factor = " + std::to_string(factor) : ""},
                                            {"loader_options", options}});
     }
 }
@@ -100,7 +101,9 @@ sd_status_t sd_upscale(sd_upscaler_t* upscaler, const sd_upscale_opt_t* options,
         if (status != SD_STATUS_OK)
             return status;
         int64_t width = config.post.image.width, height = config.post.image.height;
-        const auto scale = upscaler->model->get_scale();
+        const auto scale = upscaler->model->get_scale(config.post.factor);
+        if (!scale)
+            return sd::api::error(SD_STATUS_INVALID_ARGUMENT, "factor", "Kandinsky ImageSR supports factors 2 and 4");
         for (int i = 0; i < config.post.repeats; ++i) {
             width *= scale;
             height *= scale;
@@ -109,9 +112,10 @@ sd_status_t sd_upscale(sd_upscaler_t* upscaler, const sd_upscale_opt_t* options,
         }
         const auto* input = sd::api::bound_tensor(snapshot.get(), "image");
         sd::api::GenerationProgram program;
-        program.source = config.post.repeats == 1 ? upscaler->source : sd::api::upscale_source(upscaler->context.model.config, config.post.repeats);
+        const bool use_cached = config.post.repeats == 1 && config.post.factor == 0;
+        program.source        = use_cached ? upscaler->source : sd::api::upscale_source(upscaler->context.model.config, config.post.repeats, config.post.factor);
         program.inputs.emplace("input_image", sd::dgl::Value::object(std::shared_ptr<sd_tensor_t>(sd_tensor_retain(input), sd_tensor_free)));
-        auto value  = sd::api::execute_program(upscaler->context, program, config.post.repeats == 1 ? &upscaler->program : nullptr);
+        auto value  = sd::api::execute_program(upscaler->context, program, use_cached ? &upscaler->program : nullptr);
         auto result = std::make_unique<sd_result_t>();
         sd::api::append_program_image(*result, value, program.source);
         *out = result.release();

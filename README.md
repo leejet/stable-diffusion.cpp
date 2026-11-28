@@ -103,7 +103,7 @@ API and command-line option may change frequently.***
   - [Textual inversion embeddings](./docs/embeddings.md) for SD 1.x/2.x/SDXL via `--embd-dir` and `<embedding:...>` tags
   - Latent Consistency Models support (LCM/LCM-LoRA)
   - Faster and memory efficient latent decoding with [TAESD](./docs/models/taesd.md)
-  - Upscale images generated with [ESRGAN](./docs/models/esrgan.md)
+  - Upscale images with [ESRGAN or MoSR](./docs/models/esrgan.md) and [Kandinsky ImageSR 2.0](./docs/models/kandinsky_imagesr.md)
 - Supported backends
   - CPU (AVX, AVX2 and AVX512 support for x86 architectures)
   - CUDA

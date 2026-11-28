@@ -659,7 +659,7 @@ Response fields:
 | `[].model_url` | `string \| null` | Currently always null |
 | `[].scale` | `integer` | Currently `4` |
 
-Built-in entries include `None`, `Lanczos`, and `Nearest`. Model-backed entries are scanned from the top level of `--hires-upscalers-dir`; subdirectories are not scanned.
+Built-in entries include `None`, `Lanczos`, and `Nearest`. Model-backed entries include weight files and Kandinsky ImageSR bundle directories directly under `--hires-upscalers-dir`. Use the bundle directory name to select Kandinsky.
 
 `GET /sdapi/v1/latent-upscale-modes`
 
@@ -904,7 +904,7 @@ Shared nested fields:
 | `upscalers[].name` | `string` | Built-in name or model stem; use this value in `hires.upscaler` |
 | `upscalers[].model` | `boolean` | True for a model-backed upscaler, false for a built-in scaling filter |
 
-Built-in entries include `None`, `Lanczos`, `Nearest`, `Latent`, `Latent (nearest)`, `Latent (nearest-exact)`, `Latent (antialiased)`, `Latent (bicubic)`, and `Latent (bicubic antialiased)`. Model-backed entries are scanned from the top level of `--hires-upscalers-dir`; subdirectories are not scanned.
+Built-in entries include `None`, `Lanczos`, `Nearest`, `Latent`, `Latent (nearest)`, `Latent (nearest-exact)`, `Latent (antialiased)`, `Latent (bicubic)`, and `Latent (bicubic antialiased)`. Model-backed entries include weight files and Kandinsky ImageSR bundle directories directly under `--hires-upscalers-dir`. Use the bundle directory name to select Kandinsky.
 
 `limits`
 
@@ -1293,7 +1293,7 @@ Other native fields:
 | `scm_mask` | `string` |
 | `scm_policy_dynamic` | `boolean` |
 
-For `hires.upscaler`, use `Lanczos`, `Nearest`, `Latent`, `Latent (nearest)`, `Latent (nearest-exact)`, `Latent (antialiased)`, `Latent (bicubic)`, `Latent (bicubic antialiased)`, or an `upscalers[].name` value from `GET /sdcpp/v1/capabilities`. Model-backed upscalers are resolved as `--hires-upscalers-dir / (name + ext)` and must live directly in that directory. `hires.custom_sigmas`, when present, overrides the generated second-pass hires sigma schedule; otherwise the hires schedule is trimmed by `hires.denoising_strength`.
+For `hires.upscaler`, use `Lanczos`, `Nearest`, `Latent`, `Latent (nearest)`, `Latent (nearest-exact)`, `Latent (antialiased)`, `Latent (bicubic)`, `Latent (bicubic antialiased)`, or an `upscalers[].name` value from `GET /sdcpp/v1/capabilities`. Use the stem of a weight file or the name of a Kandinsky ImageSR bundle directly under `--hires-upscalers-dir`. `hires.custom_sigmas`, when present, overrides the generated second-pass hires sigma schedule; otherwise the hires schedule is trimmed by `hires.denoising_strength`.
 
 HTTP-only output fields:
 

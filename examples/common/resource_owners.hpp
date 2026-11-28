@@ -339,12 +339,13 @@ static inline sd_upscaler_t* create_sd_upscaler(const char* path, std::optional<
     return result;
 }
 
-static inline bool upscale_sd_image(sd_upscaler_t* ctx, SDImage image, sd_result_t** result, int repeats = 1) {
+static inline bool upscale_sd_image(sd_upscaler_t* ctx, SDImage image, sd_result_t** result, int repeats = 1, int factor = 0) {
     if (result)
         *result = nullptr;
     SDOptPtr opt(sd_upscale_opt_create());
     auto tensor = image_tensor(image);
     return opt && tensor && sd_opt_set_tensor(opt.get(), "image", tensor.get()) == SD_STATUS_OK &&
+           (!factor || sd_opt_set_int(opt.get(), "factor", factor) == SD_STATUS_OK) &&
            sd_opt_set_int(opt.get(), "repeats", repeats) == SD_STATUS_OK && sd_upscale(ctx, opt.get(), result) == SD_STATUS_OK;
 }
 

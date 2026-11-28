@@ -257,6 +257,7 @@ struct SDGenerationParams {
     SDTilingParams vae_tiling_params;
     std::string extra_tiling_args;
 
+    std::optional<int> upscale_factor;
     int upscale_repeats = 1;
     std::optional<int> upscale_tile_size;
 

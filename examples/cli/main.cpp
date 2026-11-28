@@ -827,7 +827,9 @@ int main(int argc, const char* argv[]) {
                                                        ctx_params.linear_type));
 
         if (upscaler_ctx == nullptr) {
-            LOG_ERROR("sd_upscaler_create failed");
+            LOG_ERROR("sd_upscaler_create failed: %s", sd_get_last_error());
+            if (cli_params.mode == UPSCALE)
+                return 1;
         } else {
             for (int i = 0; i < num_results; i++) {
                 if (results[i].data == nullptr) {
@@ -836,7 +838,7 @@ int main(int argc, const char* argv[]) {
                 SDImageOwner current_image(results[i]);
                 results[i]            = {0, 0, 0, nullptr};
                 sd_result_t* upscaled = nullptr;
-                if (!upscale_sd_image(upscaler_ctx.get(), current_image.get(), &upscaled, gen_params.upscale_repeats) || !upscaled) {
+                if (!upscale_sd_image(upscaler_ctx.get(), current_image.get(), &upscaled, gen_params.upscale_repeats, gen_params.upscale_factor.value_or(0)) || !upscaled) {
                     LOG_ERROR("upscale failed: %s", sd_get_last_error());
                     sd_result_free(upscaled);
                     return 1;

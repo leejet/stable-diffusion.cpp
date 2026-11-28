@@ -61,6 +61,11 @@ namespace sd::api {
         if (hires.custom_sigmas_count)
             request.values["hires_custom_sigmas"] = std::vector<float>(hires.custom_sigmas, hires.custom_sigmas + hires.custom_sigmas_count);
         if (model) {
+            if (pixels) {
+                const auto fits_x2                     = request.values.at("hires_target_width").get<int>() <= 2 * request.values.at("width").get<int>() &&
+                                                         request.values.at("hires_target_height").get<int>() <= 2 * request.values.at("height").get<int>();
+                request.fields["hires_upscale_factor"] = fits_x2 ? "2" : "4";
+            }
             request.values["hires_model_path"] = text(hires.model_path);
             auto options                       = loader_options(settings, request.video ? SDBackendModule::DIFFUSION : SDBackendModule::UPSCALER, request.definition);
             if (!request.video) {

@@ -111,6 +111,7 @@ model guide.
 ## Image and video super-resolution
 
 - [ESRGAN and MoSR](esrgan.md)
+- [Kandinsky ImageSR 2.0](kandinsky_imagesr.md)
 - [RelayVSR](relay_vsr.md)
 - [SeedVR2](seedvr2.md)
 

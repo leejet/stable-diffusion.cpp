@@ -7,7 +7,7 @@ var {
 }
 
 fn enlarge(image, index, model) {
-    return upscale(model, image)
+    return upscale(model, image{{factor_option}})
 }
 
 fn main(input_image) {
