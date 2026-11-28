@@ -1675,8 +1675,10 @@ ggml_backend_buffer_type_t ModelManager::params_buffer_type_for(const TensorStat
     ggml_backend_buffer_type_t params_buft = nullptr;
     if (state.compute_backend != nullptr && state.params_backend != state.compute_backend &&
         sd_backend_is_cpu(state.params_backend)) {
+        // Vulkan host buffers are driver allocations. Keeping offloaded weights in them
+        // can exhaust Vulkan memory even after their device copies have been evicted.
         ggml_backend_dev_t compute_dev = ggml_backend_get_device(state.compute_backend);
-        if (compute_dev != nullptr) {
+        if (compute_dev != nullptr && !sd_backend_is(state.compute_backend, "Vulkan")) {
             params_buft = ggml_backend_dev_host_buffer_type(compute_dev);
         }
     } else if (state.params_backend == state.compute_backend) {
